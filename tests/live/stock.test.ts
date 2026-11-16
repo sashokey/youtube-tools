@@ -19,7 +19,7 @@ for (const host of hosts) {
       const more = card.locator('ytd-menu-renderer button,ytm-menu button,button[aria-label="Action menu"],button[aria-label="More actions"],button[aria-label="More"]').first();
       const label = await more.getAttribute('aria-label');
       await more.click({ timeout: 6500 });
-      const menu = page.locator('ytd-menu-popup-renderer:visible,ytm-menu-popup-renderer:visible,yt-sheet-view-model:visible,[role="menu"]:visible').first();
+      const menu = page.locator('ytd-menu-popup-renderer:visible,ytm-menu-popup-renderer:visible,yt-sheet-view-model:visible,bottom-sheet-container[role="dialog"]:visible,[role="menu"]:visible').first();
       try {
         await menu.waitFor({ timeout: 6500 });
       } catch (cause) {

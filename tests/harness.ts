@@ -95,8 +95,9 @@ function gmForTest(initial: Preferences): void {
 
 export async function candidate(context: BrowserContext, initial: Preferences = {}): Promise<void> {
   let code = '';
+  const artifact = process.env.YOUTUBE_TOOLS_ARTIFACT === 'youtube-tools.debug.js' ? 'youtube-tools.debug.js' : 'youtube-tools.user.js';
   try {
-    code = await readFile(new URL('../youtube-tools.user.js', import.meta.url), 'utf8');
+    code = await readFile(new URL(`../${artifact}`, import.meta.url), 'utf8');
   } catch (error) {
     if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
   }
