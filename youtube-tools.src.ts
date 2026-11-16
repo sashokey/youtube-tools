@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Tools
 // @namespace    https://github.com/sashokey/youtube-tools
-// @version      1.0.5
+// @version      1.0.6
 // @description  Quick feedback, watched-video filtering, audio-only playback, and manual playlist navigation.
 // @match        https://www.youtube.com/*
 // @match        https://m.youtube.com/*

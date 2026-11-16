@@ -39,12 +39,14 @@ export function settings(): void {
   const controls = new Map<Setting, HTMLButtonElement>();
   let mounted: Element | null = null;
 
-  function mount(): void {
-    const scope = mobile ? location.pathname === '/select_site' && document.querySelector('ytm-settings') : document.querySelector(menu);
-    if (!scope || !visible(scope)) return;
+  function mount(): boolean {
+    const scope = mobile
+      ? location.pathname === '/select_site' && document.querySelector('ytm-settings')
+      : [...document.querySelectorAll(menu)].find(element => visible(element) && keyboardRow(element));
+    if (!scope || !visible(scope)) return false;
     const anchor = mobile ? undefined : keyboardRow(scope);
-    if (!mobile && !anchor) return;
-    if (mounted?.isConnected && scope.contains(mounted)) return;
+    if (!mobile && !anchor) return false;
+    if (mounted?.isConnected && scope.contains(mounted)) return true;
     mounted?.remove();
     const group = document.createElement('div');
     group.className = 'ytt-setting-group';
@@ -68,6 +70,7 @@ export function settings(): void {
     }
     if (anchor) anchor.after(group);
     else scope.append(group);
+    return true;
   }
 
   for (const { key } of entries) listen(key, () => controls.get(key)?.setAttribute('aria-checked', String(enabled(key))));
@@ -78,9 +81,28 @@ export function settings(): void {
     });
     navigation(mount);
   } else {
+    let deadline: number | undefined;
+    const observer = new MutationObserver(() => {
+      if (mount()) stop();
+    });
+    function stop(): void {
+      observer.disconnect();
+      window.clearTimeout(deadline);
+    }
     document.addEventListener('iron-overlay-opened', mount, true);
     document.addEventListener('click', event => {
-      if (event.target instanceof Element && event.target.closest('#avatar-btn')) window.setTimeout(mount, 0);
+      if (!event.composedPath().some(node => node instanceof Element && node.id === 'avatar-btn')) return;
+      stop();
+      observer.observe(document.querySelector('ytd-popup-container') ?? document.body, {
+        subtree: true,
+        childList: true,
+        attributes: true,
+        attributeFilter: ['hidden', 'opened', 'aria-hidden', 'style'],
+      });
+      deadline = window.setTimeout(stop, 3000);
+      window.setTimeout(() => {
+        if (mount()) stop();
+      }, 0);
     }, true);
   }
   mount();
