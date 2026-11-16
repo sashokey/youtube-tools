@@ -47,7 +47,7 @@ function feedbackMenu(host: Host, items: string[]): string {
 async function serve(context: BrowserContext, html: string | ((host: Host) => string), script = '', language = 'en-US', rtl = false): Promise<void> {
   await context.route(/^https:\/\/(?:www|m)\.youtube\.com\//, route => route.fulfill({
     contentType: 'text/html; charset=utf-8',
-    body: `<!doctype html><html lang="${language}" dir="${rtl ? 'rtl' : 'ltr'}"><head><style>
+    body: `<!doctype html><html lang="${language}" dir="${rtl ? 'rtl' : 'ltr'}"><head><meta name="viewport" content="width=device-width, initial-scale=1.0"><style>
        :root{--yt-spec-base-background:#fff;--yt-spec-text-primary:#0f0f0f}
        @media(prefers-color-scheme:dark){:root{--yt-spec-base-background:#0f0f0f;--yt-spec-text-primary:#fff}}
        body{background:var(--yt-spec-base-background);color:var(--yt-spec-text-primary)}
@@ -89,7 +89,8 @@ for (const host of hosts) {
           assert.equal(await toggle.count(), 1, `Missing ${name}`);
           assert.equal(await toggle.getAttribute('aria-checked'), 'false');
           const box = await toggle.boundingBox();
-          assert.ok(box && box.height === (mobile ? 48 : 40) && box.x >= 0 && box.x + box.width <= viewport.width + 1);
+          assert.ok(box && box.height === (mobile ? 48 : 40) && box.x >= 0 && box.x + box.width <= viewport.width + 1,
+            `Control bounds ${JSON.stringify(box)} at viewport width ${viewport.width}`);
         }
       }, settingsInit, language.language, { viewport, colorScheme, locale: 'sv-SE' }, rtl);
     });
