@@ -221,6 +221,17 @@ for (const host of hosts) {
   });
 }
 
+void test('desktop switches appear when YouTube populates the account menu after opening', async () => {
+  const init = `document.querySelector('#avatar-btn').onclick=()=>{setTimeout(()=>{document.querySelector('ytd-app').insertAdjacentHTML('beforeend',${JSON.stringify(focusableSettings)});${settingsInit}},175);};`;
+  await fixture('www.youtube.com', '/', '<ytd-app><button id="avatar-btn">Account</button></ytd-app>', async page => {
+    await page.getByRole('button', { name: 'Account', exact: true }).click();
+    const audio = page.getByRole('menuitemcheckbox', { name: 'Audio only', exact: true });
+    await audio.waitFor({ timeout: 2500 });
+    assert.equal(await audio.count(), 1);
+    assert.equal(await page.getByRole('menuitemcheckbox', { name: 'Watched videos', exact: true }).count(), 1);
+  }, init);
+});
+
 void test('both preferences propagate between desktop and mobile tabs', async () => {
   await freshPage(browser, 'www.youtube.com', async (desktop, context) => {
     await serve(context, settingsFor, settingsInit);
