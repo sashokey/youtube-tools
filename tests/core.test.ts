@@ -128,9 +128,9 @@ for (const host of hosts) {
   });
 
   for (const [name, selected] of [[interest, 'interest'], [channel, 'channel']] as const) {
-    void test(`${host} quick feedback delegates ${selected} and keeps native Undo`, async () => {
+    void test(`${host} quick feedback delegates ${selected} and keeps native Undo${mobile ? ' after the native bottom-sheet URL change' : ''}`, async () => {
       const popup = feedbackMenu(host, [interest, channel]);
-      const init = `const card=document.querySelector('#choice');const trigger=card.querySelector('.menu-trigger');trigger.onclick=()=>{document.body.insertAdjacentHTML('beforeend',${JSON.stringify(popup)});const sheet=document.querySelector('bottom-sheet-container');for(const item of sheet.querySelectorAll('[role=menuitem]'))item.onclick=()=>{sheet.remove();card.dataset.feedback=item.textContent;card.hidden=true;const undo=document.createElement('button');undo.textContent='Undo';undo.onclick=()=>{card.hidden=false;undo.remove();};document.body.append(undo);};};`;
+      const init = `const card=document.querySelector('#choice');const trigger=card.querySelector('.menu-trigger');trigger.onclick=()=>{const page=location.href;if(${mobile})history.pushState(null,'','#bottom-sheet');document.body.insertAdjacentHTML('beforeend',${JSON.stringify(popup)});const sheet=document.querySelector('bottom-sheet-container');for(const item of sheet.querySelectorAll('[role=menuitem]'))item.onclick=()=>{sheet.remove();if(${mobile})history.replaceState(null,'',page);card.dataset.feedback=item.textContent;card.hidden=true;const undo=document.createElement('button');undo.textContent='Undo';undo.onclick=()=>{card.hidden=false;undo.remove();};document.body.append(undo);};};`;
       await fixture(host, '/', withBrowse(host, card('choice')), async page => {
         await reveal(page, host, 'choice');
         const button = page.locator('#choice').getByRole('button', { name, exact: true });
@@ -138,6 +138,7 @@ for (const host of hosts) {
         await button.click();
         const undo = page.getByRole('button', { name: 'Undo', exact: true });
         await undo.waitFor({ timeout: 4000 });
+        assert.equal(new URL(page.url()).hash, '');
         assert.equal(await page.locator('#choice').isVisible(), false);
         assert.equal(await page.locator('#choice').getAttribute('data-feedback'), name);
         await undo.click();
@@ -148,7 +149,7 @@ for (const host of hosts) {
 
   void test(`${host} Mix with no channel feedback displays Unavailable and closes its own menu`, async () => {
     const popup = feedbackMenu(host, [interest, 'Save to library']);
-    const init = `document.querySelector('#mix .menu-trigger').onclick=()=>{document.body.insertAdjacentHTML('beforeend',${JSON.stringify(popup)});const sheet=document.querySelector('bottom-sheet-container');for(const item of sheet.querySelectorAll('[role=menuitem]'))item.onclick=()=>document.body.dataset.unexpected='yes';sheet.querySelector('.close-button')?.addEventListener('click',()=>sheet.remove());document.body.addEventListener('click',event=>{if(event.target===document.body)sheet.remove();});};`;
+    const init = `document.querySelector('#mix .menu-trigger').onclick=()=>{const page=location.href;if(${mobile})history.pushState(null,'','#bottom-sheet');document.body.insertAdjacentHTML('beforeend',${JSON.stringify(popup)});const sheet=document.querySelector('bottom-sheet-container');const close=()=>{sheet.remove();if(${mobile})history.replaceState(null,'',page);};for(const item of sheet.querySelectorAll('[role=menuitem]'))item.onclick=()=>document.body.dataset.unexpected='yes';sheet.querySelector('.close-button')?.addEventListener('click',close);document.body.addEventListener('click',event=>{if(event.target===document.body)close();});};`;
     await fixture(host, '/', withBrowse(host, card('mix', undefined, 'RDabcdefghijk')), async page => {
       await reveal(page, host, 'mix');
       const action = page.locator('#mix').getByRole('button', { name: channel, exact: true });
@@ -156,6 +157,7 @@ for (const host of hosts) {
       await action.click();
       await page.getByRole('button', { name: 'Unavailable', exact: true }).waitFor({ timeout: 4200 });
       assert.equal(await page.locator('bottom-sheet-container').count(), 0);
+      assert.equal(new URL(page.url()).hash, '');
       assert.equal(await page.locator('body').getAttribute('data-unexpected'), null);
     }, init);
   });
