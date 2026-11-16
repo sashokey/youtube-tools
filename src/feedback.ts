@@ -166,7 +166,8 @@ export function feedback(): void {
       try {
         trigger.click();
         const { popup, entry } = await waitForMenuAction(action, controller.signal);
-        if (controller.signal.aborted || route !== location.href || !root.contains(item.element) ||
+        const samePage = route === location.href || (mobile && popup && new URL('#bottom-sheet', route).href === location.href);
+        if (controller.signal.aborted || !samePage || !root.contains(item.element) ||
           !item.element.contains(trigger) || !item.element.contains(item.anchor) || item.anchor.href !== target) return;
         controller.abort();
         if (popup && currentMenu() !== popup) return;
