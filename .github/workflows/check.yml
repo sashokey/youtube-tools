@@ -1,0 +1,68 @@
+name: Check YouTube Tools
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npx playwright install --with-deps chromium
+      - run: npm run check
+  clean-youtube:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:stock
+  live-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npx playwright install --with-deps chromium
+      - name: Verify the official SponsorBlock 6.1.7 release
+        shell: bash
+        run: |
+          archive="$RUNNER_TEMP/sponsorblock.zip"
+          unpacked="$RUNNER_TEMP/sponsorblock"
+          curl --fail --silent --show-error --location --max-time 90 --output "$archive" https://github.com/ajayyy/SponsorBlock/releases/download/6.1.7/ChromeExtension.zip
+          printf '%s  %s\n' 7c8e3dc8b5e560b480ae8efdf28f4f1101fce0cc32434562a336a89e4962eda3 "$archive" | sha256sum --check
+          unzip -q "$archive" -d "$unpacked"
+          for manifest in "$unpacked"/manifest.json "$unpacked"/*/manifest.json; do
+            if [[ -f "$manifest" ]]; then
+              printf 'SPONSORBLOCK_EXTENSION=%s\n' "${manifest%/manifest.json}" >> "$GITHUB_ENV"
+              exit 0
+            fi
+          done
+          exit 1
+      - run: npm run test:live
