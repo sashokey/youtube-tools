@@ -3,6 +3,7 @@ import { after, before, test } from 'node:test';
 import { chromium } from 'playwright';
 import type { Browser, Page } from 'playwright';
 import { candidate, freshPage, hosts, openYouTube, play, playback, playlist, playlistPath, preference, seekNearEnd } from '../harness.ts';
+import { guestPlaybackSkip } from './guest-playback.ts';
 
 let browser: Browser;
 before(async () => { browser = await chromium.launch({ args: ['--disable-extensions', '--mute-audio'] }); });
@@ -65,7 +66,7 @@ for (const host of hosts) {
     });
   });
 
-  void test(`${host} real audio-only playback keeps the native element and opens no video buffer`, { timeout: 60000 }, async () => {
+  void test(`${host} real audio-only playback keeps the native element and opens no video buffer`, { timeout: 60000, skip: guestPlaybackSkip(host) }, async () => {
     await freshPage(browser, host, async (page, context) => {
       await candidate(context, { audioOnly: true });
       await observeBuffers(page);
@@ -77,7 +78,7 @@ for (const host of hosts) {
     });
   });
 
-  void test(`${host} both audio-mode changes take effect after a native preload`, { timeout: 90000 }, async () => {
+  void test(`${host} both audio-mode changes take effect after a native preload`, { timeout: 90000, skip: guestPlaybackSkip(host) }, async () => {
     await freshPage(browser, host, async (page, context) => {
       await candidate(context, { audioOnly: true });
       await openYouTube(page, host, playlistPath());
@@ -98,7 +99,7 @@ for (const host of hosts) {
     });
   });
 
-  void test(`${host} a real playlist stops at the end and keeps its native Next and Previous actions`, { timeout: 85000 }, async () => {
+  void test(`${host} a real playlist stops at the end and keeps its native Next and Previous actions`, { timeout: 85000, skip: guestPlaybackSkip(host) }, async () => {
     await freshPage(browser, host, async (page, context) => {
       await candidate(context);
       await openYouTube(page, host, playlistPath());

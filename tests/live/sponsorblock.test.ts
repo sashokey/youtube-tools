@@ -4,6 +4,7 @@ import { chromium } from 'playwright';
 import type { Page, Worker } from 'playwright';
 import { candidate, hosts, openYouTube, optionsFor, play, playback } from '../harness.ts';
 import type { Host } from '../harness.ts';
+import { guestPlaybackSkip } from './guest-playback.ts';
 
 const sponsorVideo = 'se9HT9At0fI';
 const tailVideo = 'rPA_nqPHjXo';
@@ -60,7 +61,7 @@ async function withSponsor(host: Host, option: 1 | 2, category: 'sponsor' | 'out
 }
 
 for (const host of hosts) {
-  for (const mode of ['automatic', 'manual'] as const) void test(`${host} SponsorBlock can ${mode === 'automatic' ? 'auto-skip' : 'manually skip'} a public segment and undo it in audio-only mode`, { timeout: 100000 }, async () => {
+  for (const mode of ['automatic', 'manual'] as const) void test(`${host} SponsorBlock can ${mode === 'automatic' ? 'auto-skip' : 'manually skip'} a public segment and undo it in audio-only mode`, { timeout: 100000, skip: guestPlaybackSkip(host) }, async () => {
     const range = await sponsorRange(sponsorVideo, 'sponsor');
     await withSponsor(host, mode === 'automatic' ? 2 : 1, 'sponsor', async page => {
       await openYouTube(page, host, `/watch?v=${sponsorVideo}`);
@@ -88,7 +89,7 @@ for (const host of hosts) {
     });
   });
 
-  void test(`${host} SponsorBlock can skip through the end of a real Mix, then follow native Next in the same page`, { timeout: 110000 }, async () => {
+  void test(`${host} SponsorBlock can skip through the end of a real Mix, then follow native Next in the same page`, { timeout: 110000, skip: guestPlaybackSkip(host) }, async () => {
     const range = await sponsorRange(tailVideo, 'outro');
     const list = `RD${tailVideo}`;
     await withSponsor(host, 2, 'outro', async page => {
