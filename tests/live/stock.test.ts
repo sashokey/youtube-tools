@@ -17,9 +17,17 @@ for (const host of hosts) {
       await card.waitFor({ timeout: 13000 });
       assert.equal(await page.locator('.ytt-action,.ytt-setting,#sbSkipIconControlBarImage').count(), 0);
       const more = card.locator('ytd-menu-renderer button,ytm-menu button,button[aria-label="Action menu"],button[aria-label="More actions"],button[aria-label="More"]').first();
+      const label = await more.getAttribute('aria-label');
       await more.click({ timeout: 6500 });
-      const menu = page.locator('ytd-menu-popup-renderer:visible,ytm-menu-popup-renderer:visible,yt-sheet-view-model:visible').first();
-      await menu.waitFor({ timeout: 6500 });
+      const menu = page.locator('ytd-menu-popup-renderer:visible,ytm-menu-popup-renderer:visible,yt-sheet-view-model:visible,[role="menu"]:visible').first();
+      try {
+        await menu.waitFor({ timeout: 6500 });
+      } catch (cause) {
+        const visible = await page.evaluate(() => [...document.querySelectorAll('[role="dialog"],[role="menu"],ytd-popup-container *,ytm-popup-container *,yt-contextual-sheet-layout')]
+          .filter(node => node.getClientRects().length && /dialog|menu|sheet|render/i.test(node.localName + (node.getAttribute('role') ?? '')))
+          .map(node => ({ tag: node.localName, role: node.getAttribute('role'), expanded: node.getAttribute('aria-expanded') })).slice(0, 20));
+        throw new Error(`Native guest menu did not become visible after "${label ?? '<no label>'}": ${JSON.stringify(visible)}`, { cause });
+      }
       assert.ok(await menu.getByRole('menuitem').count() > 0 || await menu.locator('button,ytd-menu-service-item-renderer,ytm-menu-service-item-renderer').count() > 0);
     });
   });

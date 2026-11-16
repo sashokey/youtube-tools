@@ -202,6 +202,22 @@ for (const host of hosts) {
       assert.equal(await media.count(), 1);
     }, init);
   });
+
+  void test(`${host} blocks only automatic advance and keeps explicit Next and Previous`, async () => {
+    const app = appTag(host);
+    const ending = mobile
+      ? `document.querySelector('${app}').addEventListener('player-state-change',event=>{if(event.detail.state===0)next();});document.querySelector('video').onended=()=>document.querySelector('video').dispatchEvent(new CustomEvent('player-state-change',{bubbles:true,detail:{state:0}}));`
+      : `const manager=document.createElement('yt-playlist-manager');manager.polymerController={canAutoAdvance_:false};document.querySelector('${app}').append(manager);function advance(){if(manager.polymerController.canAutoAdvance_)next();}window.addEventListener('yt-navigate-finish',()=>{manager.polymerController.canAutoAdvance_=true;});document.dispatchEvent(new Event('yt-navigate-finish',{bubbles:true}));document.querySelector('video').onended=advance;`;
+    const init = `function next(){history.pushState({},'', '/watch?v=lmnopqrstuv&list=RDabcdefghijk');}function previous(){history.pushState({},'', '/watch?v=abcdefghijk&list=RDabcdefghijk');}document.querySelector('#next').onclick=next;document.querySelector('#previous').onclick=previous;document.querySelector('#finish').onclick=()=>document.querySelector('video').dispatchEvent(new Event('ended')); ${ending}`;
+    await fixture(host, '/watch?v=abcdefghijk&list=RDabcdefghijk', `<${app}><video></video><button id="finish">End playback</button><button id="next">Next</button><button id="previous">Previous</button></${app}>`, async page => {
+      await page.getByRole('button', { name: 'End playback', exact: true }).click();
+      assert.equal(new URL(page.url()).searchParams.get('v'), 'abcdefghijk', 'Ending a playlist item must keep it selected');
+      await page.getByRole('button', { name: 'Next', exact: true }).click();
+      assert.equal(new URL(page.url()).searchParams.get('v'), 'lmnopqrstuv');
+      await page.getByRole('button', { name: 'Previous', exact: true }).click();
+      assert.equal(new URL(page.url()).searchParams.get('v'), 'abcdefghijk');
+    }, init);
+  });
 }
 
 void test('both preferences propagate between desktop and mobile tabs', async () => {
