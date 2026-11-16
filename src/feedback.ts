@@ -6,9 +6,10 @@ const cardSelector = mobile
   : 'yt-lockup-view-model,ytd-video-renderer,ytd-compact-video-renderer,ytd-grid-video-renderer';
 const thumbnail = 'a.ytLockupViewModelContentImage,a#thumbnail,a.media-item-thumbnail-container,a[href^="/watch?v="]:has(img)';
 const triggerSelector = '.ytLockupMetadataViewModelMenuButton button,ytd-menu-renderer button,ytm-menu button,#menu button,button[aria-label="Action menu"]';
-const popups = 'yt-sheet-view-model,ytd-menu-popup-renderer,ytm-menu-popup-renderer,bottom-sheet-container[role=dialog]';
+const legacyMenu = 'div#menu.menu-container:has(>.menu-content[role=dialog])';
+const popups = `yt-sheet-view-model,ytd-menu-popup-renderer,ytm-menu-popup-renderer,bottom-sheet-container[role=dialog],${legacyMenu}`;
 const nativeRow = 'yt-list-item-view-model,ytd-menu-service-item-renderer,ytm-menu-service-item-renderer';
-const nativeControl = '[role=menuitem],ytd-menu-service-item-renderer,ytm-menu-service-item-renderer,tp-yt-paper-item';
+const nativeControl = '[role=menuitem],ytd-menu-service-item-renderer,ytm-menu-service-item-renderer,ytm-menu-service-item-renderer>button,tp-yt-paper-item';
 const ignored = 'ytd-ad-slot-renderer,ytd-promoted-sparkles-web-renderer,ytm-promoted-sparkles-web-renderer,ytd-display-ad-renderer,ytm-display-ad-renderer';
 
 const icons = {
@@ -93,8 +94,8 @@ function waitForMenuAction(action: Action, signal: AbortSignal): Promise<{ popup
 }
 
 function close(menu: Element): void {
-  const sheet = menu.closest('bottom-sheet-container');
-  const button = sheet?.querySelector('button.close-button,button.ytWebScrimHiddenButton');
+  const sheet = menu.closest(`bottom-sheet-container,${legacyMenu}`);
+  const button = sheet?.querySelector('button.close-button') ?? sheet?.querySelector('button.ytWebScrimHiddenButton');
   if (button instanceof HTMLButtonElement) { button.click(); return; }
   const dropdown = menu.closest('tp-yt-iron-dropdown');
   const dismiss: unknown = dropdown && Reflect.get(dropdown, 'close');
@@ -166,7 +167,8 @@ export function feedback(): void {
       try {
         trigger.click();
         const { popup, entry } = await waitForMenuAction(action, controller.signal);
-        const samePage = route === location.href || (mobile && popup && new URL('#bottom-sheet', route).href === location.href);
+        const overlay = popup?.matches(legacyMenu) ? '#menu' : '#bottom-sheet';
+        const samePage = route === location.href || (mobile && popup && new URL(overlay, route).href === location.href);
         if (controller.signal.aborted || !samePage || !root.contains(item.element) ||
           !item.element.contains(trigger) || !item.element.contains(item.anchor) || item.anchor.href !== target) return;
         controller.abort();

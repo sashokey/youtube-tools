@@ -127,6 +127,20 @@ for (const host of hosts) {
     }, `${settingsInit}document.addEventListener('keydown',event=>{if(event.key===' ')event.preventDefault();},true);`);
   });
 
+  for (const [colorScheme, rgb, hex] of [['light', 'rgb(15, 15, 15)', '#0f0f0f'], ['dark', 'rgb(241, 241, 241)', '#f1f1f1']] as const) {
+    void test(`${host} settings match native text in ${colorScheme} theme without legacy color tokens`, async () => {
+      const nativeSelector = mobile ? '.stock' : '#keyboard a';
+      const init = `${settingsInit}document.documentElement.style.setProperty('--yt-spec-text-primary','initial');document.querySelector(${JSON.stringify(nativeSelector)}).style.color=${JSON.stringify(hex)};if(${mobile})document.body.style.color=${JSON.stringify(hex)};else document.documentElement.style.setProperty('--yt-sys-color-baseline--text-primary',${JSON.stringify(hex)});`;
+      await fixture(host, switchPath, settingsFor(host), async page => {
+        for (const name of ['Watched videos', 'Audio only']) {
+          const button = page.getByRole(switchRole, { name, exact: true });
+          assert.equal(await button.evaluate(element => getComputedStyle(element).color), rgb);
+          assert.equal(await button.locator('.ytt-setting-switch').evaluate(element => getComputedStyle(element, '::after').backgroundColor), rgb);
+        }
+      }, init, 'en-US', { colorScheme });
+    });
+  }
+
   for (const [name, selected] of [[interest, 'interest'], [channel, 'channel']] as const) {
     void test(`${host} quick feedback delegates ${selected} and keeps native Undo${mobile ? ' after the native bottom-sheet URL change' : ''}`, async () => {
       const popup = feedbackMenu(host, [interest, channel]);

@@ -10,19 +10,19 @@ const entries = [
 ] as const;
 
 const rules = `
-  .ytt-setting-group{display:block}
-  .ytt-setting{box-sizing:border-box;display:flex;align-items:center;gap:16px;inline-size:100%;block-size:40px;padding:0 16px;border:0;text-align:start;color:var(--yt-spec-text-primary,CanvasText);background:transparent;cursor:pointer;font:400 14px/20px Roboto,Arial,sans-serif}
+  .ytt-setting-group{--ytt-setting-accent:var(--yt-sys-color-baseline--call-to-action,var(--yt-spec-call-to-action,Highlight));display:block}
+  .ytt-setting{box-sizing:border-box;display:flex;align-items:center;gap:16px;inline-size:100%;block-size:40px;padding:0 16px;border:0;text-align:start;color:var(--yt-sys-color-baseline--text-primary,var(--yt-spec-text-primary,currentColor));background:transparent;cursor:pointer;font:400 14px/20px Roboto,Arial,sans-serif}
   ytm-settings .ytt-setting{block-size:48px}
-  .ytt-setting:hover,.ytt-setting:focus-visible{background:var(--yt-spec-badge-chip-background,rgba(127,127,127,.16))}
-  .ytt-setting:focus-visible{outline:2px solid var(--yt-spec-call-to-action,Highlight);outline-offset:-2px}
-  .ytt-setting:active{background:var(--yt-spec-10-percent-layer,rgba(127,127,127,.28))}
+  .ytt-setting:hover,.ytt-setting:focus-visible{background:var(--yt-sys-color-baseline--state-mono-standard-hovered,var(--yt-spec-badge-chip-background,rgba(127,127,127,.16)))}
+  .ytt-setting:focus-visible{outline:2px solid var(--ytt-setting-accent);outline-offset:-2px}
+  .ytt-setting:active{background:var(--yt-sys-color-baseline--state-mono-standard-pressed,var(--yt-spec-10-percent-layer,rgba(127,127,127,.28)))}
   .ytt-setting svg{width:24px;height:24px;flex:none;fill:currentColor}
   .ytt-setting-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .ytt-setting-switch{position:relative;inline-size:36px;block-size:20px;flex:none}
-  .ytt-setting-switch::before,.ytt-setting-switch::after{content:"";position:absolute;border-radius:16px;background:var(--yt-spec-text-secondary,GrayText)}
+  .ytt-setting-switch::before,.ytt-setting-switch::after{content:"";position:absolute;border-radius:16px;background:currentColor}
   .ytt-setting-switch::before{inset-block-start:3px;inset-inline-start:4px;inline-size:28px;block-size:14px;opacity:.55}
-  .ytt-setting-switch::after{inset-block-start:0;inset-inline-start:0;inline-size:20px;block-size:20px;background:var(--yt-spec-text-primary,CanvasText)}
-  .ytt-setting[aria-checked=true] .ytt-setting-switch::before,.ytt-setting[aria-checked=true] .ytt-setting-switch::after{background:var(--yt-spec-call-to-action,Highlight)}
+  .ytt-setting-switch::after{inset-block-start:0;inset-inline-start:0;inline-size:20px;block-size:20px}
+  .ytt-setting[aria-checked=true] .ytt-setting-switch::before,.ytt-setting[aria-checked=true] .ytt-setting-switch::after{background:var(--ytt-setting-accent)}
   .ytt-setting[aria-checked=true] .ytt-setting-switch::after{inset-inline-start:16px}
 `;
 
