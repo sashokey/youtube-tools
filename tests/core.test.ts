@@ -162,6 +162,24 @@ for (const host of hosts) {
     }, init);
   });
 
+  if (mobile) {
+    for (const available of [true, false]) {
+      const nativeLabel = available ? interest : 'Watch later';
+      const popup = `<div id="menu" class="menu-container"><div class="menu-content rounded-container" role="dialog"><ytm-menu-service-item-renderer><button class="menu-item-button">${nativeLabel}</button></ytm-menu-service-item-renderer></div><ytw-scrim><button class="ytWebScrimHiddenButton" aria-label="Close"></button></ytw-scrim></div>`;
+      const init = `const card=document.querySelector('#result');card.querySelector('.menu-trigger').onclick=()=>{const page=location.href;history.pushState(null,'','#menu');document.body.insertAdjacentHTML('beforeend',${JSON.stringify(popup)});const menu=document.querySelector('div#menu.menu-container');const close=()=>{menu.remove();history.replaceState(null,'',page);};menu.querySelector('.ytWebScrimHiddenButton').onclick=close;menu.querySelector('.menu-item-button').onclick=()=>{card.dataset.nativeSelected='yes';close();};};`;
+      void test(`mobile search closes the legacy menu and ${available ? 'activates its native button' : 'reports an unavailable action'}`, async () => {
+        await fixture(host, '/results?search_query=YouTube', withBrowse(host, card('result')), async page => {
+          const result = page.locator('#result');
+          await result.getByRole('button', { name: interest, exact: true }).click();
+          if (!available) await result.getByRole('button', { name: 'Unavailable', exact: true }).waitFor({ timeout: 4200 });
+          await page.getByRole('dialog').waitFor({ state: 'hidden', timeout: 4200 });
+          assert.equal(new URL(page.url()).hash, '');
+          assert.equal(await result.getAttribute('data-native-selected'), available ? 'yes' : null);
+        }, init);
+      });
+    }
+  }
+
   for (const path of ['/', '/@youtubecreators/videos']) void test(`${host} filters partial and completed videos on ${path}`, async () => {
     const panel = mobile ? 'ytm-playlist-panel-renderer' : 'ytd-playlist-panel-renderer';
     const markup = withBrowse(host, card('partial', 10) + card('complete', 100) + card('zero', 0) +
