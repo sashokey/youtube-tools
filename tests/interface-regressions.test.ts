@@ -883,6 +883,10 @@ void test("CSS-only shelf width changes keep the existing thumbnail controls in 
       assert.ok(before && shelfBefore);
       assert.ok(before.x + before.width <= shelfBefore.x + shelfBefore.width);
       await shelf.evaluate((element) => {
+        if (element instanceof HTMLElement) element.style.width = "0";
+      });
+      await action.waitFor({ state: "hidden" });
+      await shelf.evaluate((element) => {
         if (element instanceof HTMLElement) element.style.width = "320px";
       });
       await page.waitForFunction(() => {
@@ -902,5 +906,48 @@ void test("CSS-only shelf width changes keep the existing thumbnail controls in 
       host: mobile,
       options: { viewport: { width: 412, height: 820 } },
       css: "#shelf {overflow-x:auto;width:380px} #track {width:1000px} #video {margin-inline-start:280px}",
+    },
+  ));
+
+void test("an opaque mobile top bar without a pointer target never exposes a hidden feedback hit region", () =>
+  fixture(
+    card(),
+    async (page) => {
+      const action = page.locator(".ytt-action").first();
+      await action.waitFor();
+      const start = await action.boundingBox();
+      assert.ok(start);
+      await page.evaluate(
+        (point) => window.scrollTo(0, point.y - 24),
+        center(start),
+      );
+      const box = await action.boundingBox();
+      assert.ok(box);
+      const at = center(box);
+      const header = await page
+        .locator("ytm-mobile-topbar-renderer")
+        .boundingBox();
+      assert.ok(header && at.y > header.y && at.y < header.y + header.height);
+      const feedbackAt = () =>
+        page.evaluate(
+          ({ x, y }) =>
+            Boolean(document.elementFromPoint(x, y)?.closest(".ytt-action")),
+          at,
+        );
+      assert.equal(await feedbackAt(), false);
+      await page.locator("ytm-mobile-topbar-renderer").evaluate((element) => {
+        if (element instanceof HTMLElement) element.hidden = true;
+      });
+      await page.waitForFunction(
+        ({ x, y }) =>
+          Boolean(document.elementFromPoint(x, y)?.closest(".ytt-action")),
+        at,
+      );
+    },
+    {
+      host: mobile,
+      options: { viewport: { width: 768, height: 820 } },
+      css: "ytm-mobile-topbar-renderer {position:fixed;inset:0 0 auto;height:48px;background:#111;pointer-events:none;z-index:4}",
+      outsideFeed: "<ytm-mobile-topbar-renderer></ytm-mobile-topbar-renderer>",
     },
   ));
