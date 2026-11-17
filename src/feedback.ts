@@ -50,8 +50,10 @@ type Item = {
   surface: Element;
   panel: HTMLDivElement;
 };
-type Hovered = { item: Item; href: string };
+type Hovered = { item: Item; href: string; gesture: symbol };
 type Preview = Hovered & { target: HTMLElement };
+type Ownership = Pick<Hovered, "href" | "gesture"> & { ended: boolean };
+type HorizontalBounds = { left: number; right: number };
 type Operation = {
   item: Item;
   trigger: HTMLElement;
@@ -66,7 +68,7 @@ const styles = `
   .ytt-feedback{position:absolute;z-index:8;display:flex;flex-direction:column;gap:4px;opacity:0;visibility:hidden;pointer-events:none}
   .ytt-feedback[hidden]{display:none!important}
   .ytt-feedback-row{flex-direction:row}
-  .ytt-feedback-card:has(.ytt-feedback-thumbnail:hover):not(:has(${nativeActions}${hiddenActions}))>.ytt-feedback,.ytt-feedback-card:focus-within>.ytt-feedback,.ytt-feedback:hover,.ytt-feedback-preview{opacity:1;visibility:visible}
+  .ytt-feedback-card:has(.ytt-feedback-thumbnail:hover):not(:has(${nativeActions}${hiddenActions}))>.ytt-feedback,.ytt-feedback-card:has(${nativeActions}:hover)>.ytt-feedback,.ytt-feedback-card:focus-within>.ytt-feedback,.ytt-feedback:hover,.ytt-feedback-preview{opacity:1;visibility:visible}
   .ytt-feedback-card:has(>.ytt-feedback:hover,${nativeActions}:hover) ${nativeActions}${hiddenActions}{opacity:1;visibility:visible}
   .ytt-feedback-card:has(>.ytt-feedback:hover) ${legacyActions}:not([hidden]){opacity:1;visibility:visible}
   ${mobile ? ".ytt-feedback{opacity:1;visibility:visible}" : "@media(hover:none),(pointer:coarse){.ytt-feedback{opacity:1;visibility:visible}}"}
@@ -381,11 +383,41 @@ function sameRoute(route: string, popup?: Element): boolean {
   return overlays.some((hash) => new URL(hash, route).href === location.href);
 }
 
+function clipBounds(
+  element: Element | null,
+  viewport: number,
+  cache: Map<Element, HorizontalBounds>,
+): HorizontalBounds {
+  if (
+    !element ||
+    element === document.body ||
+    element === document.documentElement
+  )
+    return { left: 0, right: viewport };
+  const cached = cache.get(element);
+  if (cached) return cached;
+  const outer = clipBounds(element.parentElement, viewport, cache);
+  let bounds = outer;
+  if (
+    getComputedStyle(element).overflowX !== "visible" &&
+    element.clientWidth
+  ) {
+    const left = element.getBoundingClientRect().left + element.clientLeft;
+    bounds = {
+      left: Math.max(outer.left, left),
+      right: Math.min(outer.right, left + element.clientWidth),
+    };
+  }
+  cache.set(element, bounds);
+  return bounds;
+}
+
 function measure(
   item: Item,
   viewport: number,
   preview?: HTMLElement,
   origin = preview ?? item.element,
+  clips = new Map<Element, HorizontalBounds>(),
 ) {
   if (item.anchor.closest("[hidden]")) return;
   const surface = preview ?? item.surface;
@@ -397,8 +429,9 @@ function measure(
   const horizontal = image.height < stack;
   const width = horizontal ? stack : size;
   const height = horizontal ? size : stack;
-  const visibleLeft = Math.max(image.left, 0);
-  const visibleRight = Math.min(image.right, viewport);
+  const clip = clipBounds(surface.parentElement, viewport, clips);
+  const visibleLeft = Math.max(image.left, clip.left);
+  const visibleRight = Math.min(image.right, clip.right);
   const visibleWidth = visibleRight - visibleLeft;
   if (visibleWidth < width || image.height < height) return;
   const originBox = origin.getBoundingClientRect();
@@ -475,7 +508,7 @@ export function feedback(): void {
     const pendingPositions = new Set<Item>();
     const scrollPositions = new WeakMap<Element, number>();
     const changedScroll = new Set<Element>();
-    const previewOwners = new WeakMap<HTMLElement, string>();
+    const previewOwners = new WeakMap<HTMLElement, Ownership>();
     let frame: number | undefined;
     const thumbnails =
       typeof ResizeObserver === "function"
@@ -538,7 +571,7 @@ export function feedback(): void {
           old.includes(previewActive) !==
             target.classList.contains(previewActive)
         )
-          previewOwners.delete(target);
+          endOwnership(target);
         if (
           !target.matches(loaderContainer) ||
           old.includes(loaderActive) === target.classList.contains(loaderActive)
@@ -548,7 +581,14 @@ export function feedback(): void {
         return;
       }
       for (const child of target.querySelectorAll<HTMLElement>(previewTag))
-        previewOwners.delete(child);
+        endOwnership(child);
+    }
+
+    function endOwnership(target: HTMLElement): void {
+      const owner = previewOwners.get(target);
+      if (!owner || owner.ended) return;
+      owner.ended = true;
+      if (preview?.target === target) detachPreview();
     }
 
     function positionBatch(): void {
@@ -566,13 +606,14 @@ export function feedback(): void {
       const batch = [...pendingPositions];
       pendingPositions.clear();
       const viewport = document.documentElement.clientWidth;
+      const clips = new Map<Element, HorizontalBounds>();
       const positions = batch.map((item) => {
         const target = preview?.item === item ? preview.target : undefined;
         const origin =
           target && item.panel.parentElement === target ? target : item.element;
         return {
           panel: item.panel,
-          position: measure(item, viewport, target, origin),
+          position: measure(item, viewport, target, origin, clips),
         };
       });
       for (const { panel, position } of positions)
@@ -620,14 +661,14 @@ export function feedback(): void {
 
     function setHovered(item?: Item): void {
       if (hovered?.item === item && hovered?.href === item?.anchor.href) return;
-      hovered = item && { item, href: item.anchor.href };
+      hovered = item && { item, href: item.anchor.href, gesture: Symbol() };
       detachPreview();
       watchPreviewHost();
     }
 
-    function syncPreview(): void {
+    function syncPreview(fromTab = false): void {
       if (!hovered) return;
-      const { item, href } = hovered;
+      const { item, href, gesture } = hovered;
       if (href !== item.anchor.href || !visible(item.anchor)) {
         setHovered();
         return;
@@ -641,20 +682,27 @@ export function feedback(): void {
       if (preview?.target !== target) {
         detachPreview();
         const owner = previewOwners.get(target);
-        if (owner !== undefined && owner !== href) return;
+        if (
+          owner &&
+          (owner.ended ? owner.gesture === gesture : owner.href !== href)
+        )
+          return;
         const image = item.surface.getBoundingClientRect();
         const box = target.getBoundingClientRect();
         const x = image.left + image.width / 2;
         const y = image.top + image.height / 2;
         if (x < box.left || x >= box.right || y < box.top || y >= box.bottom)
           return;
-        preview = { item, target, href };
-        previewOwners.set(target, href);
+        preview = { item, target, href, gesture };
+        previewOwners.set(target, { href, gesture, ended: false });
         thumbnails?.observe(target);
       }
-      const destination = item.element.contains(document.activeElement)
-        ? item.element
-        : target;
+      const focused = document.activeElement;
+      const keepCardOrder =
+        item.element.contains(focused) ||
+        (item.panel.contains(focused) &&
+          (fromTab || Boolean(focused?.matches(":focus-visible"))));
+      const destination = keepCardOrder ? item.element : target;
       if (
         item.panel.parentElement !== destination ||
         !item.panel.classList.contains("ytt-feedback-preview")
@@ -1055,6 +1103,19 @@ export function feedback(): void {
       const item = selected && items.get(selected);
       if (item) schedulePosition(item);
     });
+    if (!mobile)
+      root.addEventListener(
+        "keydown",
+        (event) => {
+          if (
+            event instanceof KeyboardEvent &&
+            event.key === "Tab" &&
+            preview?.item.panel.contains(document.activeElement)
+          )
+            syncPreview(true);
+        },
+        true,
+      );
     root.addEventListener(
       "pointerover",
       (event) => {
