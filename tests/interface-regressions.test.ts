@@ -251,6 +251,118 @@ for (const colorScheme of ["light", "dark"] as const) {
     ));
 }
 
+void test("feedback follows the thumbnail's tonal surface and its states after replacement", () =>
+  fixture(
+    card(nativeActions.replace(hideNative, "")),
+    async (page) => {
+      const actions = page.locator(
+        "yt-thumbnail-hover-overlay-toggle-actions-view-model",
+      );
+      const native = actions.getByRole("button", { name: "Watch later" });
+      const feedback = page.locator(".ytt-action").first();
+      const style = (element: Element): string[] => {
+        const css = getComputedStyle(element);
+        return [css.backgroundColor, css.backdropFilter];
+      };
+      await page.locator("#video a").focus();
+      await feedback.waitFor();
+      await actions.evaluate((element) => {
+        const replacement = element.cloneNode(true);
+        if (!(replacement instanceof Element))
+          throw new Error("Missing replacement");
+        replacement.querySelectorAll("button").forEach((button) => {
+          button.className =
+            "ytSpecButtonShapeNextOverlayDark ytSpecButtonShapeNextTonal ytSpecButtonShapeNextEnableBackdropFilterExperiment";
+        });
+        element.replaceWith(replacement);
+      });
+      const normal = await native.evaluate(style);
+      assert.deepEqual(normal, ["rgba(0, 0, 0, 0.3)", "blur(8px)"]);
+      await page.waitForFunction((expected) => {
+        const button = document.querySelector(".ytt-action");
+        if (!button) return false;
+        const css = getComputedStyle(button);
+        return (
+          css.backgroundColor === expected[0] &&
+          css.backdropFilter === expected[1]
+        );
+      }, normal);
+      await native.hover();
+      const hovered = await native.evaluate(style);
+      await feedback.hover();
+      assert.deepEqual(await feedback.evaluate(style), hovered);
+      await native.hover();
+      await page.mouse.down();
+      const pressed = await native.evaluate(style);
+      await page.mouse.move(400, 50);
+      await page.mouse.up();
+      await feedback.hover();
+      await page.mouse.down();
+      assert.deepEqual(await feedback.evaluate(style), pressed);
+      await page.mouse.move(400, 50);
+      await page.mouse.up();
+      await native.evaluate((element) =>
+        element.classList.remove(
+          "ytSpecButtonShapeNextEnableBackdropFilterExperiment",
+        ),
+      );
+      await page.waitForFunction(() => {
+        const button = document.querySelector(".ytt-action");
+        return button && getComputedStyle(button).backdropFilter === "none";
+      });
+      assert.deepEqual(
+        await feedback.evaluate(style),
+        await native.evaluate(style),
+      );
+      await actions.evaluate((element) => {
+        element.querySelectorAll("button").forEach((button) => {
+          button.className = "";
+        });
+      });
+      await page.evaluate(
+        () =>
+          new Promise<void>((resolve) =>
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+          ),
+      );
+      const queue = actions.getByRole("button", { name: "Add to queue" });
+      await queue.evaluate((button) => {
+        button.setAttribute(
+          "class",
+          "ytSpecButtonShapeNextOverlayDark ytSpecButtonShapeNextTonal ytSpecButtonShapeNextEnableBackdropFilterExperiment",
+        );
+      });
+      await page.waitForFunction(() => {
+        const button = document.querySelector(".ytt-action");
+        return (
+          button && getComputedStyle(button).backdropFilter === "blur(8px)"
+        );
+      });
+      assert.deepEqual(
+        await feedback.evaluate(style),
+        await queue.evaluate(style),
+      );
+      await actions.evaluate((element) => element.remove());
+      await page.waitForFunction(() => {
+        const button = document.querySelector(".ytt-action");
+        if (!button) return false;
+        const css = getComputedStyle(button);
+        return (
+          css.backgroundColor === "rgba(0, 0, 0, 0.3)" &&
+          css.backdropFilter === "none"
+        );
+      });
+    },
+    {
+      css: `
+        .ytSpecButtonShapeNextOverlayDark.ytSpecButtonShapeNextTonal {background-color:rgba(0,0,0,.3)}
+        .ytSpecButtonShapeNextOverlayDark.ytSpecButtonShapeNextTonal:hover {background-color:rgba(25,25,25,.4)}
+        .ytSpecButtonShapeNextOverlayDark.ytSpecButtonShapeNextTonal:active {background-color:rgba(50,50,50,.5)}
+        .ytSpecButtonShapeNextTonal.ytSpecButtonShapeNextEnableBackdropFilterExperiment {backdrop-filter:blur(8px)}
+      `,
+    },
+  ));
+
 void test("native and feedback actions appear on the same hover frame", () =>
   fixture(card(nativeActions), async (page) => {
     const native = page.locator(

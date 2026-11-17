@@ -16,6 +16,14 @@ const hiddenActions =
   ":is(.ytThumbnailHoverOverlayToggleActionsViewModelHidden,.ytThumbnailHoverOverlayToggleActionsViewModelHiddenGated)";
 const nativeBackground =
   "ytThumbnailHoverOverlayToggleActionsViewModelOverlayBackground";
+const tonalBackground = "ytSpecButtonShapeNextTonal";
+const surfaceClasses = [
+  nativeBackground,
+  tonalBackground,
+  "ytSpecButtonShapeNextEnableBackdropFilterExperiment",
+  "ytSpecButtonShapeNextEnableLightTouchResponse",
+];
+const nativeSurface = `button:is(.${nativeBackground},.${tonalBackground})`;
 const previewHost = "#video-preview";
 const previewTag = "ytd-video-preview";
 const previewActive = "ytdVideoPreviewActive";
@@ -45,6 +53,8 @@ const icons = {
     "M12 1C5.925 1 1 5.925 1 12s4.925 11 11 11 11-4.925 11-11S18.075 1 12 1Zm0 2a9 9 0 110 18.001A9 9 0 0112 3Zm4 8H8a1 1 0 000 2h8a1 1 0 000-2Z",
 };
 type Action = keyof typeof icons;
+const actions = ["interest", "channel"] as const;
+const menuIcons: Record<Action, string> = { interest: "HIDE", channel: "REMOVE" };
 
 type Item = {
   element: Element;
@@ -52,6 +62,8 @@ type Item = {
   surface: Element;
   panel: HTMLDivElement;
   clippers: Set<Element>;
+  actionCount: number;
+  nativeSurface?: { container: Element; observer: MutationObserver };
 };
 type Hovered = { item: Item; href: string; gesture: symbol };
 type Preview = Hovered & { target: HTMLElement };
@@ -80,8 +92,9 @@ const styles = `
   .ytt-feedback-card:has(>.ytt-feedback:hover) ${legacyActions}:not([hidden]){opacity:1;visibility:visible}
   ${mobile ? ".ytt-feedback{opacity:1;visibility:visible}" : "@media(hover:none),(pointer:coarse){.ytt-feedback{opacity:1;visibility:visible}}"}
   button.ytt-action{position:relative;box-sizing:border-box;display:grid;place-items:center;width:32px;height:32px;padding:0;border:0;border-radius:50%;color:var(--yt-spec-static-white,#fff);cursor:pointer;pointer-events:auto}
-  :where(button.ytt-action){background-color:rgba(0,0,0,.6)}
-  :where(button.ytt-action):hover,:where(button.ytt-action):active{background-color:rgba(40,40,40,.6)}
+  button.ytt-action[hidden]{display:none!important}
+  :where(button.ytt-action){background-color:rgba(0,0,0,.3)}
+  :where(button.ytt-action:hover,button.ytt-action:active){background-color:rgba(40,40,40,.4)}
   button.ytt-action:focus-visible{outline:2px solid var(--yt-spec-static-white,#fff);outline-offset:2px}
   .ytt-action svg{width:24px;height:24px;fill:currentColor;pointer-events:none}
   .ytt-action[data-unavailable]::after{content:attr(title);position:absolute;inset-inline-end:calc(100% + 6px);padding:4px 8px;border-radius:4px;background:var(--yt-spec-tooltip-background,#212121);color:#fff;font:400 12px Roboto,Arial,sans-serif;white-space:nowrap}
@@ -127,16 +140,18 @@ function path(value: unknown, ...keys: string[]): unknown {
   return keys.reduce(property, value);
 }
 
-function feedbackToken(data: unknown): string | undefined {
-  const token = path(
+function rowCommand(data: unknown): unknown {
+  return path(
     data,
     "rendererContext",
     "commandContext",
     "onTap",
     "innertubeCommand",
-    "feedbackEndpoint",
-    "feedbackToken",
   );
+}
+
+function feedbackToken(data: unknown): string | undefined {
+  const token = path(rowCommand(data), "feedbackEndpoint", "feedbackToken");
   return typeof token === "string" && token ? token : undefined;
 }
 
@@ -182,9 +197,9 @@ function markFeedbackRows(rows: object[]): MenuMarker | undefined {
   };
 }
 
-function menuIdentity(trigger: HTMLElement): MenuIdentity {
+function inlineMenuItems(trigger: Element | null): unknown[] | undefined {
   const items = path(
-    trigger.closest("button-view-model"),
+    trigger?.closest("button-view-model"),
     "data",
     "onTap",
     "innertubeCommand",
@@ -196,11 +211,88 @@ function menuIdentity(trigger: HTMLElement): MenuIdentity {
     "listViewModel",
     "listItems",
   );
+  return Array.isArray(items) ? items : undefined;
+}
+
+function otherMenuCommand(command: object): boolean {
+  const url = path(command, "commandMetadata", "webCommandMetadata", "apiUrl");
+  const api =
+    typeof url === "string"
+      ? /^\/youtubei\/v\d+\/([a-z_]+)(?:\/|$)/.exec(url)?.[1]
+      : undefined;
+  if (api) {
+    if (api === "feedback") return false;
+    try {
+      const endpoints = Object.keys(command).filter((name) =>
+        name.endsWith("Endpoint"),
+      );
+      const [name] = endpoints;
+      if (endpoints.length !== 1 || !name) return false;
+      const endpoint = property(command, name);
+      return (
+        endpoint !== null &&
+        typeof endpoint === "object" &&
+        !Array.isArray(endpoint)
+      );
+    } catch {
+      return false;
+    }
+  }
+  const signal = property(command, "signalServiceEndpoint");
+  const clientActions = property(signal, "actions");
+  const strategy = path(command, "showSheetCommand", "panelLoadingStrategy");
+  return (
+    (property(signal, "signal") === "CLIENT_SIGNAL" &&
+      Array.isArray(clientActions) &&
+      clientActions.length > 0) ||
+    Boolean(
+      strategy && typeof strategy === "object" && !Array.isArray(strategy),
+    )
+  );
+}
+
+function availableActions(trigger: Element | null): Set<Action> | undefined {
+  const items = inlineMenuItems(trigger);
+  if (!items?.length) return;
+  const available = new Set<Action>();
+  for (const item of items) {
+    const download = property(item, "downloadListItemViewModel");
+    if (download && typeof download === "object" && !Array.isArray(download))
+      continue;
+    const row = property(item, "listItemViewModel");
+    const command = rowCommand(row);
+    if (!command || typeof command !== "object") return;
+    const image = path(
+      row,
+      "leadingImage",
+      "sources",
+      "0",
+      "clientResource",
+      "imageName",
+    );
+    const byIcon = actions.find((action) => image === menuIcons[action]);
+    if (!property(command, "feedbackEndpoint")) {
+      if (!byIcon && otherMenuCommand(command)) continue;
+      return;
+    }
+    if (!feedbackToken(row)) return;
+    const title = path(row, "title", "content");
+    const label = typeof title === "string" ? normalize(title) : undefined;
+    const action =
+      byIcon ??
+      actions.find((action) =>
+        feedbackLabels(action).some((text) => normalize(text) === label),
+      );
+    if (!action) return;
+    available.add(action);
+  }
+  return available;
+}
+
+function menuIdentity(trigger: HTMLElement): MenuIdentity {
   const tokens = new Set<string>();
-  if (!Array.isArray(items)) return { tokens };
-  const rows: unknown[] = items;
   const candidates: object[] = [];
-  for (const item of rows) {
+  for (const item of inlineMenuItems(trigger) ?? []) {
     const row = property(item, "listItemViewModel");
     if (!row || typeof row !== "object") continue;
     const token = feedbackToken(row);
@@ -433,12 +525,12 @@ function measure(
   const panelClip = clipBounds(origin, viewport, clips);
   for (const element of imageClip.clippers) clippers.add(element);
   for (const element of panelClip.clippers) clippers.add(element);
-  if (item.anchor.closest("[hidden]")) return;
+  if (!item.actionCount || item.anchor.closest("[hidden]")) return;
   if (getComputedStyle(surface).visibility === "hidden") return;
   const image = surface.getBoundingClientRect();
   const size = 32;
   const gap = 4;
-  const stack = size * 2 + gap;
+  const stack = size * item.actionCount + gap * (item.actionCount - 1);
   const horizontal = image.height < stack;
   const width = horizontal ? stack : size;
   const height = horizontal ? size : stack;
@@ -454,6 +546,13 @@ function measure(
   const right = visibleRight - width - insetX;
   const top = image.top + insetY;
   const bottom = image.bottom - height - insetY;
+  const source = preview ?? item.anchor;
+  const surfaceButton = source.querySelector(`${nativeActions} ${nativeSurface}`);
+  const surfaceContainer =
+    surfaceButton?.closest(nativeActions) ?? source.querySelector(nativeActions);
+  const classes = surfaceButton
+    ? surfaceClasses.filter((name) => surfaceButton.classList.contains(name))
+    : [tonalBackground];
   const native = [
     ...(preview ?? item.anchor).querySelectorAll(
       preview
@@ -482,6 +581,8 @@ function measure(
         left: `${x - originBox.left - origin.clientLeft}px`,
         top: `${y - originBox.top - origin.clientTop}px`,
         horizontal,
+        classes,
+        surfaceContainer,
       };
   }
 }
@@ -496,6 +597,9 @@ function positionPanel(
   panel.classList.toggle("ytt-feedback-row", position.horizontal);
   if (panel.style.left !== position.left) panel.style.left = position.left;
   if (panel.style.top !== position.top) panel.style.top = position.top;
+  for (const button of panel.children)
+    for (const name of surfaceClasses)
+      button.classList.toggle(name, position.classes.includes(name));
 }
 
 function movePanel(panel: HTMLDivElement, parent: Element): void {
@@ -693,7 +797,7 @@ export function feedback(): void {
           box: bar.getBoundingClientRect(),
         }))
         .filter(({ box }) => box.width > 0 && box.height > 0);
-      const masks = [...visibleMobile].map(({ panel }) => {
+      const masks = [...visibleMobile].map(({ panel, anchor }) => {
         const bounds = panel.getBoundingClientRect();
         let top = 0;
         let bottom = 0;
@@ -724,14 +828,19 @@ export function feedback(): void {
           });
         return {
           panel,
+          anchor,
           buttons,
           clip: clipped ? `inset(${top}px 0 ${bottom}px)` : "",
         };
       });
-      for (const { panel, buttons, clip } of masks) {
+      for (const { panel, anchor, buttons, clip } of masks) {
         if (panel.style.clipPath !== clip) panel.style.clipPath = clip;
-        for (const { button, inert } of buttons)
-          if (button.inert !== inert) button.inert = inert;
+        for (const { button, inert } of buttons) {
+          if (button.inert === inert) continue;
+          if (inert && button === document.activeElement)
+            anchor.focus({ preventScroll: true });
+          button.inert = inert;
+        }
       }
       if (
         typeof CSSTransition === "function" &&
@@ -751,6 +860,25 @@ export function feedback(): void {
     function scheduleMobileClip(): void {
       if (visibleMobile.size)
         mobileFrame ??= window.requestAnimationFrame(clipMobileControls);
+    }
+
+    function setPosition(item: Item, position: ReturnType<typeof measure>): void {
+      const container = position?.surfaceContainer ?? undefined;
+      if (item.nativeSurface?.container !== container) {
+        item.nativeSurface?.observer.disconnect();
+        if (container) {
+          const observer = new MutationObserver(() => schedulePosition(item));
+          observer.observe(container, {
+            attributes: true,
+            attributeFilter: ["class"],
+            subtree: true,
+          });
+          item.nativeSurface = { container, observer };
+        } else {
+          delete item.nativeSurface;
+        }
+      }
+      positionPanel(item.panel, position);
     }
 
     function positionBatch(): void {
@@ -782,7 +910,7 @@ export function feedback(): void {
       });
       for (const { item, clippers, position } of positions) {
         watchClipping(item, clippers);
-        positionPanel(item.panel, position);
+        setPosition(item, position);
       }
       scheduleMobileClip();
     }
@@ -864,6 +992,7 @@ export function feedback(): void {
         previewOwners.set(target, { href, gesture, ended: false });
         thumbnails?.observe(target);
       }
+      syncActions(item);
       const focused = document.activeElement;
       const keepCardOrder =
         item.element.contains(focused) ||
@@ -884,7 +1013,7 @@ export function feedback(): void {
           target,
         );
         watchClipping(item, clippers);
-        positionPanel(item.panel, position);
+        setPosition(item, position);
         item.panel.classList.add("ytt-feedback-preview");
         if (item.panel.parentElement !== destination)
           movePanel(item.panel, destination);
@@ -937,6 +1066,8 @@ export function feedback(): void {
       action: Action,
     ): Promise<void> {
       if (operation || !activeRoute()) return;
+      refreshActions(item);
+      if (button.hidden) return;
       const trigger = item.element.querySelector(triggerSelector);
       if (
         !(trigger instanceof HTMLElement) ||
@@ -1018,11 +1149,12 @@ export function feedback(): void {
           sameRoute(current.route, popup) &&
           validTarget(current);
         if (!canSelect) return;
+        refreshActions(item);
         const owned = popup ? ownedMenus() : [];
         if (popup && (owned.length !== 1 || owned[0] !== popup)) return;
-        if (!entry || !popup || selectedEntry(popup) !== entry) {
+        if (button.hidden || !entry || !popup || selectedEntry(popup) !== entry) {
           if (popup) close(popup);
-          unavailable(button, action);
+          if (!button.hidden) unavailable(button, action);
           return;
         }
         entry.click();
@@ -1044,6 +1176,7 @@ export function feedback(): void {
 
     function remove(item: Item): void {
       if (hovered?.item === item) setHovered();
+      item.nativeSurface?.observer.disconnect();
       thumbnails?.unobserve(item.surface);
       watchClipping(item, new Set());
       mobileThumbnails?.unobserve(item.surface);
@@ -1065,6 +1198,39 @@ export function feedback(): void {
       item.anchor.classList.remove("ytt-feedback-thumbnail");
       item.element.classList.remove("ytt-feedback-card");
       items.delete(item.element);
+    }
+
+    function syncActions(item: Item): void {
+      const available = availableActions(
+        item.element.querySelector(triggerSelector),
+      );
+      item.actionCount = available?.size ?? actions.length;
+      const focused = document.activeElement;
+      let departing: HTMLButtonElement | undefined;
+      for (const [index, action] of actions.entries()) {
+        const button = item.panel.children.item(index);
+        const hidden = available !== undefined && !available.has(action);
+        if (!(button instanceof HTMLButtonElement) || button.hidden === hidden)
+          continue;
+        if (hidden && button === focused) departing = button;
+        else button.hidden = hidden;
+      }
+      if (departing) {
+        const target = [
+          ...item.panel.querySelectorAll<HTMLButtonElement>(
+            "button:not([hidden])",
+          ),
+        ].find((button) => button !== departing);
+        target?.focus({ preventScroll: true });
+        if (!target || document.activeElement !== target)
+          item.anchor.focus({ preventScroll: true });
+        departing.hidden = true;
+      }
+    }
+
+    function refreshActions(item: Item): void {
+      syncActions(item);
+      schedulePosition(item);
     }
 
     function mount(element: Element): void {
@@ -1091,7 +1257,7 @@ export function feedback(): void {
           surface === old.surface &&
           ownsPanel(old)
         ) {
-          schedulePosition(old);
+          refreshActions(old);
           return;
         }
         remove(old);
@@ -1105,11 +1271,12 @@ export function feedback(): void {
         surface,
         panel,
         clippers: new Set(),
+        actionCount: actions.length,
       };
-      for (const action of ["interest", "channel"] as const) {
+      for (const action of actions) {
         const button = document.createElement("button");
         button.type = "button";
-        button.className = `ytt-action ytSpecButtonShapeNextHost ytSpecButtonShapeNextIconButton ytSpecButtonShapeNextOverlayDark ${nativeBackground}`;
+        button.className = `ytt-action ytSpecButtonShapeNextHost ytSpecButtonShapeNextIconButton ytSpecButtonShapeNextOverlayDark ${tonalBackground}`;
         rename(button, message(action));
         button.append(svg(icons[action]));
         activation(
@@ -1121,6 +1288,7 @@ export function feedback(): void {
         );
         panel.append(button);
       }
+      syncActions(item);
       items.set(element, item);
       element.classList.add("ytt-feedback-card");
       anchor.classList.add("ytt-feedback-thumbnail");
@@ -1307,7 +1475,7 @@ export function feedback(): void {
           ? event.target.closest(cardSelector)
           : null;
       const item = selected && items.get(selected);
-      if (item) schedulePosition(item);
+      if (item) refreshActions(item);
     });
     if (!mobile)
       root.addEventListener(
@@ -1343,7 +1511,7 @@ export function feedback(): void {
               ? item
               : undefined,
           );
-        if (item) schedulePosition(item);
+        if (item) refreshActions(item);
       },
       { capture: true, passive: true },
     );

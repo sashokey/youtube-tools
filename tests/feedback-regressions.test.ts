@@ -49,6 +49,8 @@ type Row = {
   key: string;
   label: string;
   icon?: string;
+  modelIcon?: string;
+  modelCommand?: object;
   attributes?: string;
   rowAttributes?: string;
 };
@@ -99,19 +101,25 @@ function installNativeMenu({
   )) {
     const trigger = card.querySelector("button.fixture-trigger");
     const original = [card.querySelector("a"), trigger?.parentElement];
-    const rowData = (id: string, key: string) => ({
+    const rowData = (id: string, key: string, command?: object) => ({
       rendererContext: {
         commandContext: {
           onTap: {
-            innertubeCommand: {
+            innertubeCommand: command ?? {
               feedbackEndpoint: { feedbackToken: `${id}:${key}` },
             },
           },
         },
       },
     });
-    const itemData = rows.map(({ key }) => rowData(card.id, key));
-    if (linkToCard && mobile && trigger) {
+    const itemData = rows.map(({ key, label, modelIcon, modelCommand }) => ({
+      ...rowData(card.id, key, modelCommand),
+      ...(modelIcon && {
+        title: { content: label },
+        leadingImage: { sources: [{ clientResource: { imageName: modelIcon } }] },
+      }),
+    }));
+    if (linkToCard && trigger && (mobile || rows.some((row) => row.modelIcon))) {
       const view = document.createElement("button-view-model");
       const listViewModel = {
         listItems: itemData.map((listItemViewModel) => ({ listItemViewModel })),
@@ -288,6 +296,407 @@ async function revealNativeMenu(page: Page, id: string): Promise<void> {
     );
   });
 }
+
+type InlineAction = {
+  label: string;
+  icon: string;
+  key?: string;
+  command?: object;
+};
+const inlineInterest = { label: interest, icon: "HIDE", key: "interest" };
+const inlineChannel = { label: channel, icon: "REMOVE", key: "channel" };
+
+function apiCommand(name: string, route: string): object {
+  return {
+    commandMetadata: {
+      webCommandMetadata: { apiUrl: `/youtubei/v1/${route}` },
+    },
+    [name]: {},
+  };
+}
+
+function setInlineMenu(
+  element: Element,
+  {
+    actions,
+    keepTrigger = false,
+    download = false,
+  }: {
+    actions: InlineAction[];
+    keepTrigger?: boolean;
+    download?: boolean;
+  },
+): void {
+  const button = element.querySelector("button.fixture-trigger");
+  if (!button) throw new Error("Missing menu trigger");
+  const current = button.closest("button-view-model");
+  const view = document.createElement("button-view-model");
+  const listItems: object[] = actions.map(({ label, icon, key, command }) => ({
+    listItemViewModel: {
+      title: { content: label },
+      leadingImage: { sources: [{ clientResource: { imageName: icon } }] },
+      rendererContext: {
+        commandContext: {
+          onTap: {
+            innertubeCommand:
+              command ??
+              (key
+                ? {
+                    feedbackEndpoint: { feedbackToken: `${element.id}:${key}` },
+                  }
+                : {}),
+          },
+        },
+      },
+    },
+  }));
+  if (download) listItems.push({ downloadListItemViewModel: {} });
+  const inlineContent = {
+    sheetViewModel: { content: { listViewModel: { listItems } } },
+  };
+  const innertubeCommand = {
+    showSheetCommand: { panelLoadingStrategy: { inlineContent } },
+  };
+  const data = { onTap: { innertubeCommand } };
+  if (keepTrigger && current) {
+    Object.assign(current, { data });
+    return;
+  }
+  Object.assign(view, { data });
+  (current ?? button).replaceWith(view);
+  view.append(button);
+}
+
+for (const host of hosts) {
+  void test(`${host} shows only the available native feedback on a Mix`, () =>
+    fixture(
+      async (page) => {
+        const mix = page.locator("#mix");
+        const video = page.locator("#video");
+        await mix.evaluate(setInlineMenu, {
+          actions: [
+            {
+              label: "Add to queue",
+              icon: "ADD_TO_QUEUE_TAIL",
+              command: {
+                signalServiceEndpoint: {
+                  signal: "CLIENT_SIGNAL",
+                  actions: [{}],
+                },
+              },
+            },
+            {
+              label: "Watch later",
+              icon: "WATCH_LATER",
+              command: apiCommand(
+                "playlistEditEndpoint",
+                "browse/edit_playlist",
+              ),
+            },
+            {
+              label: "Save to playlist",
+              icon: "BOOKMARK_BORDER",
+              command: { showSheetCommand: { panelLoadingStrategy: {} } },
+            },
+            {
+              label: "Share",
+              icon: "SHARE",
+              command: apiCommand(
+                "shareEntityServiceEndpoint",
+                "share/get_share_panel",
+              ),
+            },
+            {
+              label: "Report",
+              icon: "FLAG",
+              command: apiCommand("getReportFormEndpoint", "flag/get_form"),
+            },
+            {
+              label: "Save to library",
+              icon: "LIBRARY_ADD",
+              command: apiCommand("likeEndpoint", "like/like"),
+            },
+            inlineInterest,
+          ],
+          download: true,
+        });
+        await video.evaluate(setInlineMenu, {
+          actions: [inlineInterest, inlineChannel],
+        });
+        for (const card of [mix, video]) {
+          await card.getByRole("link").focus();
+          await card
+            .getByRole("button", { name: interest, exact: true })
+            .waitFor();
+          assert.equal(
+            await card
+              .getByRole("button", { name: channel, exact: true })
+              .count(),
+            card === mix ? 0 : 1,
+          );
+          assert.equal(await card.getAttribute("data-menu-opens"), null);
+        }
+      },
+      {
+        host,
+        contents:
+          card("mix", "abcdefghijk&list=RDMMabcdefghijk&start_radio=1") +
+          card("video", "lmnopqrstuv&list=RDlmnopqrstuv&start_radio=1"),
+      },
+    ));
+}
+
+void test("replacing inline menu data updates feedback on the same thumbnail", () =>
+  fixture(async (page) => {
+    const video = page.locator("#alpha");
+    const quickInterest = video.getByRole("button", {
+      name: interest,
+      exact: true,
+    });
+    const quickChannel = video.getByRole("button", {
+      name: channel,
+      exact: true,
+    });
+    await video.evaluate(setInlineMenu, {
+      actions: [inlineInterest, inlineChannel],
+    });
+    await video.getByRole("link").focus();
+    await quickChannel.waitFor();
+    await quickChannel.focus();
+    await video.evaluate(setInlineMenu, { actions: [inlineInterest] });
+    await quickChannel.waitFor({ state: "hidden" });
+    assert.equal(
+      await quickInterest.evaluate((node) => node === document.activeElement),
+      true,
+    );
+    await video.evaluate(setInlineMenu, {
+      actions: [inlineInterest, inlineChannel],
+    });
+    await quickChannel.waitFor();
+    assert.equal(await video.locator(".ytt-feedback").count(), 1);
+  }));
+
+void test("entering a reused card refreshes native menu data on its existing button", () =>
+  fixture(async (page) => {
+    const video = page.locator("#alpha");
+    const link = video.getByRole("link");
+    const quickChannel = video.getByRole("button", {
+      name: channel,
+      exact: true,
+    });
+    await video.evaluate(setInlineMenu, {
+      actions: [inlineInterest, inlineChannel],
+    });
+    await link.focus();
+    await quickChannel.waitFor();
+    await page.getByRole("button", { name: "Outside" }).focus();
+    await video.evaluate(setInlineMenu, {
+      actions: [inlineInterest],
+      keepTrigger: true,
+    });
+    await link.focus();
+    await video.getByRole("button", { name: interest, exact: true }).waitFor();
+    await quickChannel.waitFor({ state: "hidden" });
+    await video.evaluate(setInlineMenu, {
+      actions: [inlineInterest, inlineChannel],
+      keepTrigger: true,
+    });
+    await link.hover();
+    await quickChannel.waitFor();
+  }));
+
+void test("focus moves to the thumbnail when the remaining mobile action is clipped", () =>
+  fixture(
+    async (page) => {
+      const video = page.locator("#alpha");
+      const dismiss = video.locator(".ytt-action").first();
+      const quickChannel = video.getByRole("button", {
+        name: channel,
+        exact: true,
+      });
+      await video.evaluate(setInlineMenu, {
+        actions: [inlineInterest, inlineChannel],
+      });
+      await dismiss.waitFor();
+      await dismiss.evaluate((button) => {
+        const bar = document.createElement("ytm-mobile-topbar-renderer");
+        bar.style.cssText = `position:fixed;inset:0 0 auto;height:${Math.ceil(button.getBoundingClientRect().bottom)}px`;
+        button.closest("ytm-app")?.prepend(bar);
+      });
+      await video.locator(".ytt-action[inert]").waitFor({ state: "attached" });
+      await quickChannel.focus();
+      assert.equal(
+        await quickChannel.evaluate((node) => node === document.activeElement),
+        true,
+      );
+      await video.evaluate(setInlineMenu, { actions: [inlineInterest] });
+      await quickChannel.waitFor({ state: "hidden" });
+      assert.equal(await video.locator("a:focus").count(), 1);
+    },
+    { host: "m.youtube.com" },
+  ));
+
+void test("focus returns to the thumbnail if repositioning clips the remaining mobile action", () =>
+  fixture(
+    async (page) => {
+      const video = page.locator("#alpha");
+      const dismiss = video.locator(".ytt-action").first();
+      const quickChannel = video.getByRole("button", {
+        name: channel,
+        exact: true,
+      });
+      await video.evaluate(setInlineMenu, {
+        actions: [inlineInterest, inlineChannel],
+      });
+      await dismiss.waitFor();
+      await video.getByRole("link").evaluate((link) => {
+        link.setAttribute("style", "height:160px");
+        const overlay = document.createElement(
+          "yt-thumbnail-hover-overlay-toggle-actions-view-model",
+        );
+        overlay.style.cssText = "position:absolute;inset:42px 4px auto auto";
+        const native = document.createElement("button");
+        native.style.cssText = "display:block;width:32px;height:32px";
+        overlay.append(native);
+        link.append(overlay);
+        const bar = document.createElement("ytm-mobile-topbar-renderer");
+        bar.style.cssText = `position:fixed;inset:0 0 auto;height:${Math.ceil(link.getBoundingClientRect().top + 42)}px`;
+        link.closest("ytm-app")?.prepend(bar);
+      });
+      await page.waitForFunction(() => {
+        const top = document.querySelector("ytm-mobile-topbar-renderer");
+        const button = document.querySelector(".ytt-action");
+        return (
+          top &&
+          button &&
+          button.getBoundingClientRect().top >
+            top.getBoundingClientRect().bottom
+        );
+      });
+      await quickChannel.focus();
+      await video.evaluate(setInlineMenu, { actions: [inlineInterest] });
+      await video
+        .locator(".ytt-action:first-child[inert]")
+        .waitFor({ state: "attached" });
+      assert.equal(await video.locator("a:focus").count(), 1);
+    },
+    { host: "m.youtube.com" },
+  ));
+
+void test("a quick action rechecks native menu data before opening the menu", () =>
+  fixture(async (page) => {
+    const video = page.locator("#alpha");
+    const quickChannel = video.getByRole("button", {
+      name: channel,
+      exact: true,
+    });
+    await video.evaluate(setInlineMenu, {
+      actions: [inlineInterest, inlineChannel],
+    });
+    await video.getByRole("link").focus();
+    await quickChannel.waitFor();
+    await video.evaluate(setInlineMenu, {
+      actions: [inlineInterest],
+      keepTrigger: true,
+    });
+    await quickChannel.evaluate((button) => {
+      if (button instanceof HTMLButtonElement) button.click();
+    });
+    assert.equal(await video.getAttribute("data-menu-opens"), null);
+    await quickChannel.waitFor({ state: "hidden" });
+  }));
+
+void test("an unidentified inline feedback row preserves native click-time discovery", () =>
+  fixture(async (page) => {
+    const video = page.locator("#alpha");
+    await video.evaluate(setInlineMenu, {
+      actions: [
+        inlineInterest,
+        {
+          ...inlineChannel,
+          label: "Unrecognized translation",
+          icon: "UNKNOWN",
+        },
+      ],
+    });
+    await quickAction(page, "alpha", channel);
+    assert.equal(
+      await video.getAttribute("data-selection"),
+      "channel:/watch?v=abcdefghijk",
+    );
+  }));
+
+void test("a partial inline menu preserves native click-time discovery", () =>
+  fixture(async (page) => {
+    const video = page.locator("#alpha");
+    await video.evaluate(setInlineMenu, {
+      actions: [{ label: "Loading", icon: "UNKNOWN" }],
+    });
+    await quickAction(page, "alpha", interest);
+    assert.equal(
+      await video.getAttribute("data-selection"),
+      "interest:/watch?v=abcdefghijk",
+    );
+  }));
+
+void test("a pending action that disappears closes its stale owned menu without selecting a row", () =>
+  fixture(
+    async (page) => {
+      const video = page.locator("#alpha");
+      await video.evaluate(setInlineMenu, {
+        actions: [inlineInterest, inlineChannel],
+      });
+      await quickAction(page, "alpha", channel);
+      assert.equal(await video.getAttribute("data-menu-opens"), "1");
+      await video.evaluate(setInlineMenu, {
+        actions: [inlineInterest],
+        keepTrigger: true,
+      });
+      await revealNativeMenu(page, "alpha");
+      await page
+        .locator("yt-sheet-view-model[data-owner=alpha]")
+        .waitFor({ state: "detached" });
+      assert.equal(await video.getAttribute("data-native-clicks"), null);
+    },
+    { menu: { delayed: true } },
+  ));
+
+void test("the remaining inline Mix action invokes the matching mobile menu row and supports Undo", () =>
+  fixture(
+    async (page) => {
+      const mix = page.locator("#mix");
+      await quickAction(page, "mix", interest);
+      assert.equal(
+        await mix.getAttribute("data-selection"),
+        "interest:/watch?v=abcdefghijk&list=RDMMabcdefghijk&start_radio=1",
+      );
+      await mix.getByRole("button", { name: "Undo", exact: true }).click();
+      await mix.getByRole("link").focus();
+      await mix.getByRole("button", { name: interest, exact: true }).waitFor();
+      assert.equal(
+        await mix.getByRole("button", { name: channel, exact: true }).count(),
+        0,
+      );
+    },
+    {
+      host: "m.youtube.com",
+      contents: card("mix", "abcdefghijk&list=RDMMabcdefghijk&start_radio=1"),
+      menu: {
+        rows: [
+          {
+            key: "share",
+            label: "Share",
+            modelIcon: "SHARE",
+            modelCommand: apiCommand(
+              "shareEntityServiceEndpoint",
+              "share/get_share_panel",
+            ),
+          },
+          { key: "interest", label: interest, modelIcon: "HIDE" },
+        ],
+      },
+    },
+  ));
 
 for (const host of hosts) {
   const pair = card("alpha", "abcdefghijk") + card("beta", "lmnopqrstuv");
