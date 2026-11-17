@@ -123,21 +123,45 @@ for (const host of hosts) {
         await card.waitFor({ timeout: 13000 });
         if (host === "www.youtube.com")
           await card.locator('a[href^="/watch?v="]').first().focus();
-        assert.equal(
-          await card
-            .getByRole("button", { name: "Not interested", exact: true })
-            .count(),
-          1,
-        );
-        assert.equal(
-          await card
-            .getByRole("button", {
-              name: "Don't recommend channel",
-              exact: true,
-            })
-            .count(),
-          1,
-        );
+        for (const name of ["Not interested", "Don't recommend channel"]) {
+          const button = card.getByRole("button", { name, exact: true });
+          try {
+            await button.waitFor({ timeout: 4500 });
+          } catch (error) {
+            const layout = await card.evaluate((element) => {
+              const selectors = [
+                "a.ytt-feedback-thumbnail",
+                "ytd-thumbnail",
+                "yt-thumbnail-view-model",
+                "img",
+                "yt-thumbnail-hover-overlay-toggle-actions-view-model",
+                "ytd-thumbnail-overlay-toggle-button-renderer",
+                ".ytt-feedback",
+              ];
+              return {
+                width: document.documentElement.clientWidth,
+                focusWithin: element.matches(":focus-within"),
+                elements: selectors.map((selector) => {
+                  const node = element.querySelector(selector);
+                  if (!node) return [selector, null];
+                  const { x, y, width, height } = node.getBoundingClientRect();
+                  const { display, visibility } = getComputedStyle(node);
+                  return [
+                    selector,
+                    { x, y, width, height, display, visibility },
+                  ];
+                }),
+              };
+            });
+            throw new Error(
+              `Feedback action ${name} is unavailable in ${JSON.stringify(layout)}`,
+              {
+                cause: error,
+              },
+            );
+          }
+          assert.equal(await button.count(), 1);
+        }
       });
     },
   );
