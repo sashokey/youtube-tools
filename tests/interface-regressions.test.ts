@@ -45,6 +45,7 @@ const cardStyles = `
   .ytThumbnailHoverOverlayToggleActionsViewModelHidden {visibility:hidden}
   .ytThumbnailHoverOverlayToggleActionsViewModelOverlayBackground {background-color:rgba(0,0,0,.6)}
   .ytThumbnailHoverOverlayToggleActionsViewModelOverlayBackground:hover {background-color:rgba(40,40,40,.6)}
+  .ytThumbnailHoverOverlayToggleActionsViewModelOverlayBackground:active {background-color:rgba(60,60,60,.6)}
 `;
 
 type Layout = {
@@ -223,10 +224,28 @@ for (const colorScheme of ["light", "dark"] as const) {
           await feedback.evaluate(background),
           await native.evaluate(background),
         );
+        const shape = (element: Element): string[] => {
+          const css = getComputedStyle(element);
+          return [css.width, css.height, css.borderRadius, css.color];
+        };
+        assert.deepEqual(
+          await feedback.evaluate(shape),
+          await native.evaluate(shape),
+        );
         await native.hover();
         const hovered = await native.evaluate(background);
         await feedback.hover();
         assert.equal(await feedback.evaluate(background), hovered);
+        await native.hover();
+        await page.mouse.down();
+        const pressed = await native.evaluate(background);
+        await page.mouse.move(400, 50);
+        await page.mouse.up();
+        await feedback.hover();
+        await page.mouse.down();
+        assert.equal(await feedback.evaluate(background), pressed);
+        await page.mouse.move(400, 50);
+        await page.mouse.up();
       },
       { options: { colorScheme } },
     ));
@@ -267,6 +286,7 @@ function previewFixture(run: (page: Page) => Promise<void>): Promise<void> {
   return fixture(card() + card("", "next-video"), run, {
     css: `
       ytd-video-preview-loader {position:fixed;z-index:2}
+      .ytdVideoPreviewLoaderVideoPreviewContainer {width:100%;height:100%}
       ytd-video-preview {position:relative;display:block;width:100%;height:100%;background:#555}
       ytm-mute-button,ytm-closed-captioning-button {position:absolute;inset-inline-end:4px;inset-block-start:4px}
       ytm-closed-captioning-button {inset-block-start:40px}
@@ -438,3 +458,132 @@ void test("the current account menu receives switches when an older menu is stil
       beforeCandidate: `document.addEventListener("DOMContentLoaded", () => { for (const row of document.querySelectorAll("ytd-compact-link-renderer")) row.data = {icon: {iconType: "KEYBOARD"}}; });`,
     },
   ));
+
+const legacyCard = `<ytd-compact-video-renderer id="legacy"><ytd-thumbnail>
+  <a id="thumbnail" href="/watch?v=abcdefghijk"><img alt="Video">
+    <ytd-thumbnail-overlay-toggle-button-renderer><button type="button">Watch later</button></ytd-thumbnail-overlay-toggle-button-renderer>
+  </a>
+  </ytd-thumbnail><ytd-menu-renderer><button type="button">More</button></ytd-menu-renderer></ytd-compact-video-renderer>`;
+const legacyStyles = `
+  ytd-compact-video-renderer,ytd-thumbnail,#thumbnail {display:block}
+  #legacy {position:relative;margin-block:80px}
+  ytd-thumbnail {position:relative;width:227px}
+  #thumbnail {position:relative;width:227px;height:121px}
+  #thumbnail img {display:block;width:215px;height:121px}
+  ytd-thumbnail-overlay-toggle-button-renderer {position:absolute;inset-inline-end:16px;inset-block-start:4px;width:32px;height:32px;visibility:hidden}
+  ytd-thumbnail:hover ytd-thumbnail-overlay-toggle-button-renderer {visibility:visible}
+`;
+
+void test("legacy feedback fits the image and keeps legacy actions visible", () =>
+  fixture(
+    legacyCard,
+    async (page) => {
+      await page.locator("#thumbnail img").hover();
+      const stock = page.locator(
+        "ytd-thumbnail-overlay-toggle-button-renderer",
+      );
+      await stock.waitFor();
+      const action = page.locator(".ytt-action").first();
+      await action.waitFor();
+      const feedbackBox = await action.boundingBox();
+      const imageBox = await page.locator("#thumbnail img").boundingBox();
+      assert.ok(feedbackBox && imageBox);
+      assert.ok(
+        feedbackBox.x + feedbackBox.width <= imageBox.x + imageBox.width,
+      );
+      await action.hover();
+      assert.equal(await stock.isVisible(), true);
+    },
+    { path: "/watch?v=abcdefghijk", css: legacyStyles },
+  ));
+
+void test("the controls remain in the visible portion of a horizontally clipped thumbnail", () =>
+  fixture(
+    card(),
+    async (page) => {
+      await page.locator("#video a").evaluate((element) => {
+        if (element instanceof HTMLElement)
+          element.focus({ preventScroll: true });
+      });
+      const action = page.locator("#video .ytt-action").first();
+      await action.waitFor();
+      const box = await action.boundingBox();
+      assert.ok(box);
+      const { x, y } = center(box);
+      assert.equal(
+        await page.evaluate(
+          ({ x, y }) =>
+            Boolean(document.elementFromPoint(x, y)?.closest(".ytt-action")),
+          { x, y },
+        ),
+        true,
+      );
+    },
+    {
+      options: { viewport: { width: 1000, height: 820 } },
+      css: "#video {margin-inline-start:940px} body {overflow-x:hidden}",
+    },
+  ));
+
+void test("feedback keeps keyboard focus when the pointer leaves the preview", () =>
+  previewFixture(async (page) => {
+    await enterPreviewWithPointer(page);
+    const action = page.locator("ytd-video-preview .ytt-action").first();
+    await action.focus();
+    await page.locator("#next-video a").hover();
+    await page
+      .locator("#video .ytt-action")
+      .first()
+      .waitFor({ state: "attached" });
+    assert.equal(
+      await page.evaluate(() => document.activeElement?.closest("#video")?.id),
+      "video",
+    );
+    assert.equal(await page.locator("#video .ytt-action:focus").count(), 1);
+  }));
+
+void test("inactive feedback leaves an anchored preview when the source becomes CSS-hidden", () =>
+  previewFixture(async (page) => {
+    await enterPreviewWithPointer(page);
+    await page.locator("#video").evaluate((element) => {
+      if (element instanceof HTMLElement) element.style.display = "none";
+    });
+    await page
+      .locator("ytd-video-preview .ytt-feedback")
+      .waitFor({ state: "detached" });
+    assert.equal(
+      await page.getByRole("button", { name: "Not interested" }).count(),
+      0,
+    );
+  }));
+
+void test("a native inline preview rerender restores one feedback panel and measures the updated controls", () =>
+  previewFixture(async (page) => {
+    await enterPreviewWithPointer(page);
+    const preview = page.locator("ytd-video-preview");
+    await preview.evaluate((element) => {
+      const captions = element.querySelector("ytm-closed-captioning-button");
+      if (!(captions instanceof HTMLElement))
+        throw new Error("Missing captions control");
+      captions.style.insetBlockStart = "90px";
+      const panel = element.querySelector(".ytt-feedback");
+      if (!panel) throw new Error("Missing feedback");
+      panel.remove();
+    });
+    const captions = preview.getByRole("button", { name: "Captions" });
+    const captionsBox = await captions.boundingBox();
+    assert.ok(captionsBox);
+    await preview.locator(".ytt-feedback").waitFor();
+    assert.equal(await preview.locator(".ytt-feedback").count(), 1);
+    assert.equal(
+      await page.evaluate(
+        ({ x, y }) =>
+          document
+            .elementFromPoint(x, y)
+            ?.closest("button")
+            ?.getAttribute("aria-label"),
+        center(captionsBox),
+      ),
+      "Captions",
+    );
+  }));
