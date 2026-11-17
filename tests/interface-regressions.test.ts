@@ -265,7 +265,7 @@ void test("native and feedback actions appear on the same hover frame", () =>
     assert.deepEqual(await actionsOnFirstFrame(page), [true, true]);
   }));
 
-void test("moving from a desktop thumbnail to its feedback action keeps the native actions visible", () =>
+void test("moving between native and script actions keeps both visible", () =>
   fixture(card(nativeActions.replace(hideNative, "")), async (page) => {
     const link = page.locator("#video a");
     await link.evaluate((element, hidden) => {
@@ -277,6 +277,11 @@ void test("moving from a desktop thumbnail to its feedback action keeps the nati
     }, hideNative);
     await link.hover();
     await page.locator(".ytt-action").first().hover();
+    assert.deepEqual(await actionsOnFirstFrame(page), [true, true]);
+    await page
+      .locator("yt-thumbnail-hover-overlay-toggle-actions-view-model button")
+      .first()
+      .hover();
     assert.deepEqual(await actionsOnFirstFrame(page), [true, true]);
   }));
 
