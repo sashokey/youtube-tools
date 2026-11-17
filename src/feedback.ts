@@ -522,7 +522,11 @@ export function feedback(): void {
     const changedScroll = new Set<Element>();
     const previewOwners = new WeakMap<HTMLElement, Ownership>();
     const visibleMobile = new Set<Item>();
+    const observedMobileBars = new Set<Element>();
     let mobileFrame: number | undefined;
+    const mobileBarChanges = mobile
+      ? new MutationObserver(() => scheduleMobileClip())
+      : undefined;
     const mobileThumbnails =
       mobile && typeof IntersectionObserver === "function"
         ? new IntersectionObserver((entries) => {
@@ -549,6 +553,10 @@ export function feedback(): void {
       typeof ResizeObserver === "function"
         ? new ResizeObserver((entries) => {
             for (const { target, contentRect } of entries) {
+              if (observedMobileBars.has(target)) {
+                scheduleMobileClip();
+                continue;
+              }
               if (preview?.target === target) {
                 schedulePosition(preview.item);
                 continue;
@@ -651,9 +659,31 @@ export function feedback(): void {
       item.clippers = next;
     }
 
+    function watchMobileBars(next: readonly Element[]): void {
+      if (
+        next.length === observedMobileBars.size &&
+        next.every((bar) => observedMobileBars.has(bar))
+      )
+        return;
+      mobileBarChanges?.disconnect();
+      for (const bar of observedMobileBars)
+        if (!next.includes(bar)) thumbnails?.unobserve(bar);
+      for (const bar of next) {
+        if (!observedMobileBars.has(bar)) thumbnails?.observe(bar);
+        mobileBarChanges?.observe(bar, {
+          attributes: true,
+          attributeFilter: ["class", "hidden", "style"],
+        });
+      }
+      observedMobileBars.clear();
+      next.forEach((bar) => observedMobileBars.add(bar));
+    }
+
     function clipMobileControls(): void {
       mobileFrame = undefined;
-      const bars = [...root.querySelectorAll(mobileBars)]
+      const nativeBars = [...root.querySelectorAll(mobileBars)];
+      watchMobileBars(nativeBars);
+      const bars = nativeBars
         .filter((bar) => {
           const { visibility, opacity } = getComputedStyle(bar);
           return visibility === "visible" && opacity !== "0";
@@ -703,6 +733,19 @@ export function feedback(): void {
         for (const { button, inert } of buttons)
           if (button.inert !== inert) button.inert = inert;
       }
+      if (
+        typeof CSSTransition === "function" &&
+        nativeBars.some((bar) =>
+          bar
+            .getAnimations()
+            .some(
+              (animation) =>
+                animation instanceof CSSTransition &&
+                animation.playState === "running",
+            ),
+        )
+      )
+        scheduleMobileClip();
     }
 
     function scheduleMobileClip(): void {
@@ -1117,10 +1160,16 @@ export function feedback(): void {
       for (const record of records) {
         if (
           mobile &&
-          record.target instanceof Element &&
-          record.target.matches(mobileBars)
+          record.type === "childList" &&
+          [...record.addedNodes, ...record.removedNodes].some(
+            (node) =>
+              node instanceof Element &&
+              (node.matches(mobileBars) ||
+                (record.target === root && node.querySelector(mobileBars))),
+          )
         )
-          scheduleMobileClip();
+          if (visibleMobile.size) scheduleMobileClip();
+          else watchMobileBars([]);
         const card =
           record.target instanceof Element && items.get(record.target);
         if (
@@ -1177,6 +1226,7 @@ export function feedback(): void {
       if (changed) {
         cancelOperation();
         observer.disconnect();
+        if (mobile && !nextScope) watchMobileBars([]);
         for (const item of items.values())
           if (!nextScope?.contains(item.element)) remove(item);
         scope = nextScope;
@@ -1242,10 +1292,14 @@ export function feedback(): void {
       { capture: true, passive: true },
     );
     if (mobile)
-      root.addEventListener("transitionend", (event) => {
-        if (event.target instanceof Element && event.target.closest(mobileBars))
-          scheduleMobileClip();
-      });
+      for (const type of ["transitionrun", "transitionend", "transitioncancel"])
+        root.addEventListener(type, (event) => {
+          if (
+            event.target instanceof Element &&
+            event.target.matches(mobileBars)
+          )
+            scheduleMobileClip();
+        });
     root.addEventListener("focusin", (event) => {
       if (preview) syncPreview();
       const selected =

@@ -977,6 +977,28 @@ void test("an opaque mobile top bar without a pointer target never exposes a hid
           Boolean(document.elementFromPoint(x, y)?.closest(".ytt-action")),
         at,
       );
+      await bar.evaluate((element) => {
+        if (element instanceof HTMLElement) element.style.height = "48px";
+      });
+      await page.waitForFunction(
+        ({ x, y }) => !document.elementFromPoint(x, y)?.closest(".ytt-action"),
+        at,
+      );
+      await bar.evaluate((element) => {
+        if (!(element instanceof HTMLElement))
+          throw new Error("Missing top bar");
+        element.style.transition = "transform 800ms linear";
+        element.style.transform = "translateY(-48px)";
+      });
+      await page.waitForFunction(({ x, y }) => {
+        const bar = document.querySelector("ytm-mobile-topbar-renderer");
+        return Boolean(
+          bar
+            ?.getAnimations()
+            .some((animation) => animation.playState === "running") &&
+          document.elementFromPoint(x, y)?.closest(".ytt-action"),
+        );
+      }, at);
     },
     {
       host: mobile,
