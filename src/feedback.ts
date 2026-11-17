@@ -5,6 +5,8 @@ const cardSelector = mobile
   ? "yt-lockup-view-model,ytm-video-with-context-renderer,ytm-compact-video-renderer"
   : "yt-lockup-view-model,ytd-video-renderer,ytd-compact-video-renderer,ytd-grid-video-renderer,ytd-rich-item-renderer";
 const desktopFeed = "ytd-page-manager,#page-manager";
+const mobileTop = "ytm-mobile-topbar-renderer";
+const mobileBars = `${mobileTop},ytm-pivot-bar-renderer`;
 const thumbnail =
   'a.ytLockupViewModelContentImage,a#thumbnail,a.media-item-thumbnail-container,a[href^="/watch?v="]:has(img)';
 const picture = "yt-thumbnail-view-model,ytd-thumbnail";
@@ -405,7 +407,7 @@ function clipBounds(
   let bounds = outer;
   if (
     getComputedStyle(element).overflowX !== "visible" &&
-    element.clientWidth
+    element.getClientRects().length
   ) {
     const left = element.getBoundingClientRect().left + element.clientLeft;
     bounds = {
@@ -519,6 +521,21 @@ export function feedback(): void {
     const scrollPositions = new WeakMap<Element, number>();
     const changedScroll = new Set<Element>();
     const previewOwners = new WeakMap<HTMLElement, Ownership>();
+    const visibleMobile = new Set<Item>();
+    let mobileFrame: number | undefined;
+    const mobileThumbnails =
+      mobile && typeof IntersectionObserver === "function"
+        ? new IntersectionObserver((entries) => {
+            for (const { target, isIntersecting } of entries) {
+              const card = target.closest(cardSelector);
+              const item = card && items.get(card);
+              if (item?.surface !== target) continue;
+              if (isIntersecting) visibleMobile.add(item);
+              else visibleMobile.delete(item);
+            }
+            scheduleMobileClip();
+          })
+        : undefined;
     const clippedItems = new Map<Element, Set<Item>>();
     const clippingSizes =
       typeof ResizeObserver === "function"
@@ -634,6 +651,65 @@ export function feedback(): void {
       item.clippers = next;
     }
 
+    function clipMobileControls(): void {
+      mobileFrame = undefined;
+      const bars = [...root.querySelectorAll(mobileBars)]
+        .filter((bar) => {
+          const { visibility, opacity } = getComputedStyle(bar);
+          return visibility === "visible" && opacity !== "0";
+        })
+        .map((bar) => ({
+          upper: bar.matches(mobileTop),
+          box: bar.getBoundingClientRect(),
+        }))
+        .filter(({ box }) => box.width > 0 && box.height > 0);
+      const masks = [...visibleMobile].map(({ panel }) => {
+        const bounds = panel.getBoundingClientRect();
+        let top = 0;
+        let bottom = 0;
+        for (const { upper, box } of bars) {
+          if (
+            bounds.right <= box.left ||
+            bounds.left >= box.right ||
+            bounds.bottom <= box.top ||
+            bounds.top >= box.bottom
+          )
+            continue;
+          if (upper) top = Math.max(top, box.bottom - bounds.top);
+          else bottom = Math.max(bottom, bounds.bottom - box.top);
+        }
+        top = Math.min(top, bounds.height);
+        bottom = Math.min(bottom, bounds.height - top);
+        const clipped = top > 0 || bottom > 0;
+        const buttons = [...panel.children]
+          .filter((child) => child instanceof HTMLButtonElement)
+          .map((button) => {
+            const box = clipped ? button.getBoundingClientRect() : undefined;
+            const inert = Boolean(
+              box &&
+              (box.bottom <= bounds.top + top ||
+                box.top >= bounds.bottom - bottom),
+            );
+            return { button, inert };
+          });
+        return {
+          panel,
+          buttons,
+          clip: clipped ? `inset(${top}px 0 ${bottom}px)` : "",
+        };
+      });
+      for (const { panel, buttons, clip } of masks) {
+        if (panel.style.clipPath !== clip) panel.style.clipPath = clip;
+        for (const { button, inert } of buttons)
+          if (button.inert !== inert) button.inert = inert;
+      }
+    }
+
+    function scheduleMobileClip(): void {
+      if (visibleMobile.size)
+        mobileFrame ??= window.requestAnimationFrame(clipMobileControls);
+    }
+
     function positionBatch(): void {
       frame = undefined;
       for (const scroller of changedScroll) {
@@ -665,6 +741,7 @@ export function feedback(): void {
         watchClipping(item, clippers);
         positionPanel(item.panel, position);
       }
+      scheduleMobileClip();
     }
 
     function schedulePosition(item: Item): void {
@@ -926,6 +1003,12 @@ export function feedback(): void {
       if (hovered?.item === item) setHovered();
       thumbnails?.unobserve(item.surface);
       watchClipping(item, new Set());
+      mobileThumbnails?.unobserve(item.surface);
+      visibleMobile.delete(item);
+      if (!visibleMobile.size && mobileFrame !== undefined) {
+        window.cancelAnimationFrame(mobileFrame);
+        mobileFrame = undefined;
+      }
       pendingPositions.delete(item);
       if (
         frame !== undefined &&
@@ -1000,6 +1083,7 @@ export function feedback(): void {
       anchor.classList.add("ytt-feedback-thumbnail");
       element.append(panel);
       thumbnails?.observe(surface);
+      mobileThumbnails?.observe(surface);
       schedulePosition(item);
     }
 
@@ -1031,6 +1115,12 @@ export function feedback(): void {
           .forEach((card) => updated.add(card));
       }
       for (const record of records) {
+        if (
+          mobile &&
+          record.target instanceof Element &&
+          record.target.matches(mobileBars)
+        )
+          scheduleMobileClip();
         const card =
           record.target instanceof Element && items.get(record.target);
         if (
@@ -1142,6 +1232,7 @@ export function feedback(): void {
           !(scope.contains(scroller) || scroller.contains(scope))
         )
           return;
+        scheduleMobileClip();
         const left = scroller.scrollLeft;
         if (left === (scrollPositions.get(scroller) ?? 0)) return;
         scrollPositions.set(scroller, left);
@@ -1150,6 +1241,11 @@ export function feedback(): void {
       },
       { capture: true, passive: true },
     );
+    if (mobile)
+      root.addEventListener("transitionend", (event) => {
+        if (event.target instanceof Element && event.target.closest(mobileBars))
+          scheduleMobileClip();
+      });
     root.addEventListener("focusin", (event) => {
       if (preview) syncPreview();
       const selected =

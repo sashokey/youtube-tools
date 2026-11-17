@@ -928,13 +928,14 @@ void test("an opaque mobile top bar without a pointer target never exposes a hid
         .locator("ytm-mobile-topbar-renderer")
         .boundingBox();
       assert.ok(header && at.y > header.y && at.y < header.y + header.height);
-      const feedbackAt = () =>
-        page.evaluate(
-          ({ x, y }) =>
-            Boolean(document.elementFromPoint(x, y)?.closest(".ytt-action")),
-          at,
-        );
-      assert.equal(await feedbackAt(), false);
+      await page.waitForFunction(
+        ({ x, y }) => !document.elementFromPoint(x, y)?.closest(".ytt-action"),
+        at,
+      );
+      assert.equal(
+        await action.evaluate((e) => e instanceof HTMLElement && e.inert),
+        true,
+      );
       await page.locator("ytm-mobile-topbar-renderer").evaluate((element) => {
         if (element instanceof HTMLElement) element.hidden = true;
       });
@@ -942,6 +943,10 @@ void test("an opaque mobile top bar without a pointer target never exposes a hid
         ({ x, y }) =>
           Boolean(document.elementFromPoint(x, y)?.closest(".ytt-action")),
         at,
+      );
+      assert.equal(
+        await action.evaluate((e) => e instanceof HTMLElement && e.inert),
+        false,
       );
     },
     {
