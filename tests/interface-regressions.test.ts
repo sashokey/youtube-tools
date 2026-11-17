@@ -764,3 +764,56 @@ void test("touch reaches the native player settings, submenu and scrim above bot
         '<bottom-sheet-container hidden role="dialog"><button aria-label="Scrim"></button><button role="menuitem">Quality</button><button aria-label="Close"></button></bottom-sheet-container>',
     },
   ));
+
+void test("restarting the same native preview cannot retain an earlier hover's actions", () =>
+  previewFixture(async (page) => {
+    await enterPreviewWithPointer(page);
+    const player = page.locator("ytd-video-preview");
+    await player.evaluate((element) => {
+      element.classList.remove("ytdVideoPreviewActive");
+      element.classList.add("ytdVideoPreviewActive");
+    });
+    await player.locator(".ytt-feedback").waitFor({ state: "detached" });
+  }));
+
+void test("Tab after pointer focus inside the preview continues with the next card", () =>
+  previewFixture(async (page) => {
+    await enterPreviewWithPointer(page);
+    const first = page.locator("ytd-video-preview .ytt-action").first();
+    await first.evaluate((button) => {
+      button.addEventListener(
+        "click",
+        (event) => {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+        },
+        { capture: true },
+      );
+    });
+    await first.click();
+    await page.keyboard.press("Tab");
+    assert.equal(
+      await page.locator(":focus").getAttribute("aria-label"),
+      "Don't recommend channel",
+    );
+    await page.keyboard.press("Tab");
+    assert.equal(await page.locator("#next-video a:focus").count(), 1);
+  }));
+
+void test("feedback fits the visible thumbnail inside a shelf narrower than the viewport", () =>
+  fixture(
+    `<div id="shelf"><div id="track">${card()}</div></div>`,
+    async (page) => {
+      const action = page.locator(".ytt-action").first();
+      await action.waitFor();
+      const box = await action.boundingBox();
+      const shelf = await page.locator("#shelf").boundingBox();
+      assert.ok(box && shelf);
+      assert.ok(box.x >= shelf.x && box.x + box.width <= shelf.x + shelf.width);
+    },
+    {
+      host: mobile,
+      options: { viewport: { width: 412, height: 820 } },
+      css: "#shelf {overflow-x:auto;width:380px} #track {width:1000px} #video {margin-inline-start:280px}",
+    },
+  ));
