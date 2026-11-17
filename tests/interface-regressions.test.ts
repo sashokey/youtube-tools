@@ -281,6 +281,11 @@ void test("moving between native and script actions keeps both visible", () =>
       "yt-thumbnail-hover-overlay-toggle-actions-view-model button",
     );
     await feedback.hover();
+    await stock.first().evaluate((element, hidden) => {
+      element
+        .closest("yt-thumbnail-hover-overlay-toggle-actions-view-model")
+        ?.classList.add(hidden);
+    }, hideNative);
     assert.deepEqual(await actionsOnFirstFrame(page), [true, true]);
     const feedbackBox = await feedback.boundingBox();
     const nativeBox = await stock.last().boundingBox();
