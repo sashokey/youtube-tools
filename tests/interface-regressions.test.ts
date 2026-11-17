@@ -23,9 +23,9 @@ const nativeActions = `<yt-thumbnail-hover-overlay-toggle-actions-view-model cla
   <button type="button" class="ytThumbnailHoverOverlayToggleActionsViewModelOverlayBackground">Add to queue</button>
 </yt-thumbnail-hover-overlay-toggle-actions-view-model>`;
 
-function card(content = "", id = "video"): string {
+function card(content = "", id = "video", video = "abcdefghijk"): string {
   return `<yt-lockup-view-model id="${id}">
-    <a class="ytLockupViewModelContentImage" href="/watch?v=abcdefghijk">
+    <a class="ytLockupViewModelContentImage" href="/watch?v=${video}">
       <yt-thumbnail-view-model><img alt="Video">${content}</yt-thumbnail-view-model>
     </a>
     <div class="ytLockupMetadataViewModelMenuButton"><button type="button">More</button></div>
@@ -283,7 +283,7 @@ void test("moving from a desktop thumbnail to its feedback action keeps the nati
 const previewMarkup = `<div id="video-preview"><ytd-video-preview-loader hidden><div class="ytdVideoPreviewLoaderVideoPreviewContainer ytdVideoPreviewLoaderAnchored"><ytd-video-preview class="ytdVideoPreviewActive ytdVideoPreviewFillContainer"><ytm-mute-button><button aria-label="Mute"></button></ytm-mute-button><ytm-closed-captioning-button><button aria-label="Captions"></button></ytm-closed-captioning-button></ytd-video-preview></div></ytd-video-preview-loader></div>`;
 
 function previewFixture(run: (page: Page) => Promise<void>): Promise<void> {
-  return fixture(card() + card("", "next-video"), run, {
+  return fixture(card() + card("", "next-video", "lmnopqrstuv"), run, {
     css: `
       ytd-video-preview-loader {position:fixed;z-index:2}
       .ytdVideoPreviewLoaderVideoPreviewContainer {width:100%;height:100%}
@@ -587,3 +587,180 @@ void test("a native inline preview rerender restores one feedback panel and meas
       "Captions",
     );
   }));
+
+void test("an active inline preview cannot pick up feedback for a different intersecting card", () =>
+  previewFixture(async (page) => {
+    await enterPreviewWithPointer(page);
+    const nextImage = await page
+      .locator("#next-video yt-thumbnail-view-model")
+      .boundingBox();
+    assert.ok(nextImage);
+    const loader = page.locator("ytd-video-preview-loader");
+    await loader.evaluate((element, box) => {
+      if (!(element instanceof HTMLElement)) throw new Error("Missing preview");
+      element.style.height = `${box.y + box.height * 0.75 - element.getBoundingClientRect().top}px`;
+    }, nextImage);
+    const x = nextImage.x + nextImage.width / 2;
+    const y = nextImage.y + nextImage.height;
+    await page.mouse.move(x, y - 4);
+    assert.equal(
+      await page.evaluate(
+        ({ x, y }) =>
+          document.elementFromPoint(x, y)?.closest("#next-video")?.id,
+        { x, y: y - 4 },
+      ),
+      "next-video",
+    );
+    await page.mouse.move(x, y - nextImage.height / 2);
+    const wrongRequests = await page.evaluate(() => {
+      const trigger = document.querySelector<HTMLButtonElement>(
+        "#next-video .ytLockupMetadataViewModelMenuButton button",
+      );
+      if (!trigger) throw new Error("Missing second card menu");
+      let requests = 0;
+      trigger.addEventListener("click", () => requests++);
+      document
+        .querySelector<HTMLButtonElement>("ytd-video-preview .ytt-action")
+        ?.click();
+      return requests;
+    });
+    assert.equal(wrongRequests, 0);
+
+    await loader.evaluate((element, box) => {
+      if (!(element instanceof HTMLElement)) throw new Error("Missing preview");
+      const preview = element.querySelector("ytd-video-preview");
+      if (!preview) throw new Error("Missing native preview");
+      preview.classList.remove("ytdVideoPreviewActive");
+      element.style.top = `${box.y}px`;
+      element.style.height = `${box.height}px`;
+      preview.classList.add("ytdVideoPreviewActive");
+    }, nextImage);
+    await loader.locator(".ytt-action").first().waitFor();
+  }));
+
+void test("same-route YouTube events leave feedback on the active inline preview", () =>
+  previewFixture(async (page) => {
+    await enterPreviewWithPointer(page);
+    await page.evaluate(() => {
+      document.dispatchEvent(new Event("yt-page-type-changed"));
+      document.dispatchEvent(new Event("yt-navigate-finish"));
+    });
+    assert.equal(
+      await page.locator("ytd-video-preview .ytt-action").count(),
+      2,
+    );
+  }));
+
+void test("Tab reaches both actions in card order while its inline preview is active", () =>
+  previewFixture(async (page) => {
+    await enterPreviewWithPointer(page);
+    await page.locator("#video a").focus();
+    await page.keyboard.press("Tab");
+    await page.keyboard.press("Tab");
+    assert.equal(
+      await page.locator(":focus").getAttribute("aria-label"),
+      "Not interested",
+    );
+    await page.keyboard.press("Tab");
+    assert.equal(
+      await page.locator(":focus").getAttribute("aria-label"),
+      "Don't recommend channel",
+    );
+    await page.keyboard.press("Tab");
+    assert.equal(await page.locator("#next-video a:focus").count(), 1);
+  }));
+
+void test("mobile horizontal scrolling reveals feedback on a thumbnail entering the viewport", () =>
+  fixture(
+    `<div id="shelf"><div id="track">${card()}</div></div>`,
+    async (page) => {
+      const action = page.locator(".ytt-action").first();
+      await action.waitFor({ state: "attached" });
+      await action.waitFor({ state: "hidden" });
+      await page.locator("#shelf").evaluate((element) => {
+        element.scrollLeft = 420;
+      });
+      await action.waitFor();
+      const box = await action.boundingBox();
+      assert.ok(box);
+      assert.ok(box.x >= 0 && box.x + box.width <= 412);
+    },
+    {
+      host: mobile,
+      options: { viewport: { width: 412, height: 820 } },
+      css: "#shelf {overflow-x:auto;width:100vw} #track {width:1000px} #video {margin-inline-start:420px}",
+    },
+  ));
+
+void test("touch reaches the native player settings, submenu and scrim above both feedback actions", () =>
+  fixture(
+    card(),
+    async (page) => {
+      const drawer = page.locator("bottom-sheet-container");
+      await drawer.evaluate((element) => {
+        const menu = element.querySelector("button[role=menuitem]");
+        const scrim = element.querySelector("button[aria-label=Scrim]");
+        const close = element.querySelector("button[aria-label=Close]");
+        if (!menu || !scrim || !close)
+          throw new Error("Missing native controls");
+        scrim.addEventListener("click", () =>
+          element.setAttribute("data-scrim", "hit"),
+        );
+        menu.addEventListener("click", () => {
+          const submenu = menu.textContent === "Auto";
+          element.setAttribute("data-view", submenu ? "submenu" : "quality");
+          menu.textContent = "Auto";
+        });
+        close.addEventListener("click", () =>
+          element.setAttribute("hidden", ""),
+        );
+      });
+      const buttons = page.locator(".ytt-action");
+      await buttons.first().waitFor({ state: "attached" });
+      const [first, second] = await buttons.all();
+      assert.ok(first && second);
+      await first.waitFor();
+      const firstBox = await first.boundingBox();
+      const secondBox = await second.boundingBox();
+      assert.ok(firstBox && secondBox);
+      const a = center(firstBox);
+      const b = center(secondBox);
+      await drawer.evaluate(
+        (element, top) => {
+          if (!(element instanceof HTMLElement))
+            throw new Error("Missing settings drawer");
+          element.style.setProperty("--settings-top", `${top}px`);
+          element.hidden = false;
+        },
+        (a.y + b.y) / 2,
+      );
+      await page.touchscreen.tap(a.x, a.y);
+      assert.equal(await drawer.getAttribute("data-scrim"), "hit");
+      await page.touchscreen.tap(b.x, b.y);
+      assert.equal(await drawer.getAttribute("data-view"), "quality");
+      await page.touchscreen.tap(b.x, b.y);
+      assert.equal(await drawer.getAttribute("data-view"), "submenu");
+      await drawer.getByRole("button", { name: "Close" }).tap();
+      for (const point of [a, b])
+        assert.equal(
+          await page.evaluate(
+            ({ x, y }) =>
+              Boolean(document.elementFromPoint(x, y)?.closest(".ytt-action")),
+            point,
+          ),
+          true,
+        );
+    },
+    {
+      host: mobile,
+      path: "/watch?v=abcdefghijk",
+      css: `
+        bottom-sheet-container {position:fixed;inset:0;z-index:5}
+        bottom-sheet-container > button[aria-label=Scrim] {position:absolute;inset:0}
+        bottom-sheet-container > button[role=menuitem] {position:absolute;inset:var(--settings-top) 0 auto;height:48px}
+        bottom-sheet-container > button[aria-label=Close] {position:absolute;top:0;left:0}
+      `,
+      outsideFeed:
+        '<bottom-sheet-container hidden role="dialog"><button aria-label="Scrim"></button><button role="menuitem">Quality</button><button aria-label="Close"></button></bottom-sheet-container>',
+    },
+  ));
