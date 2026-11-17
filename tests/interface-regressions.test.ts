@@ -276,12 +276,20 @@ void test("moving between native and script actions keeps both visible", () =>
       );
     }, hideNative);
     await link.hover();
-    await page.locator(".ytt-action").first().hover();
+    const feedback = page.locator(".ytt-action").first();
+    const stock = page.locator(
+      "yt-thumbnail-hover-overlay-toggle-actions-view-model button",
+    );
+    await feedback.hover();
     assert.deepEqual(await actionsOnFirstFrame(page), [true, true]);
-    await page
-      .locator("yt-thumbnail-hover-overlay-toggle-actions-view-model button")
-      .first()
-      .hover();
+    const feedbackBox = await feedback.boundingBox();
+    const nativeBox = await stock.last().boundingBox();
+    assert.ok(feedbackBox && nativeBox);
+    const gap = feedbackBox.y - nativeBox.y - nativeBox.height;
+    assert.ok(gap > 0);
+    await page.mouse.move(center(feedbackBox).x, feedbackBox.y - gap / 2);
+    assert.deepEqual(await actionsOnFirstFrame(page), [true, true]);
+    await stock.first().hover();
     assert.deepEqual(await actionsOnFirstFrame(page), [true, true]);
   }));
 
@@ -815,6 +823,75 @@ void test("feedback fits the visible thumbnail inside a shelf narrower than the 
       const shelf = await page.locator("#shelf").boundingBox();
       assert.ok(box && shelf);
       assert.ok(box.x >= shelf.x && box.x + box.width <= shelf.x + shelf.width);
+    },
+    {
+      host: mobile,
+      options: { viewport: { width: 412, height: 820 } },
+      css: "#shelf {overflow-x:auto;width:380px} #track {width:1000px} #video {margin-inline-start:280px}",
+    },
+  ));
+
+void test("hiding and revealing the preview node ends the earlier feedback ownership", () =>
+  previewFixture(async (page) => {
+    await enterPreviewWithPointer(page);
+    const player = page.locator("ytd-video-preview");
+    await player.evaluate((element) => {
+      if (!(element instanceof HTMLElement)) throw new Error("Missing preview");
+      element.hidden = true;
+      element.hidden = false;
+    });
+    await player.locator(".ytt-feedback").waitFor({ state: "detached" });
+  }));
+
+void test("the keyboard action panel remains inside its shelf when the preview overflows it", () =>
+  previewFixture(async (page) => {
+    await page.locator("#video").evaluate((element) => {
+      const shelf = document.createElement("div");
+      shelf.id = "clipping-shelf";
+      shelf.style.width = "180px";
+      shelf.style.overflowX = "hidden";
+      element.before(shelf);
+      shelf.append(element);
+    });
+    await enterPreviewWithPointer(page);
+    await page.locator("#video a").evaluate((element) => {
+      if (element instanceof HTMLElement)
+        element.focus({ preventScroll: true });
+    });
+    const action = page.locator("#video .ytt-action").first();
+    await action.waitFor();
+    const box = await action.boundingBox();
+    const shelf = await page.locator("#clipping-shelf").boundingBox();
+    assert.ok(box && shelf);
+    assert.ok(box.x >= shelf.x && box.x + box.width <= shelf.x + shelf.width);
+  }));
+
+void test("CSS-only shelf width changes keep the existing thumbnail controls in view", () =>
+  fixture(
+    `<div id="shelf"><div id="track">${card()}</div></div>`,
+    async (page) => {
+      const action = page.locator(".ytt-action").first();
+      await action.waitFor();
+      const shelf = page.locator("#shelf");
+      const before = await action.boundingBox();
+      const shelfBefore = await shelf.boundingBox();
+      assert.ok(before && shelfBefore);
+      assert.ok(before.x + before.width <= shelfBefore.x + shelfBefore.width);
+      await shelf.evaluate((element) => {
+        if (element instanceof HTMLElement) element.style.width = "320px";
+      });
+      await page.waitForFunction(() => {
+        const action = document.querySelector(".ytt-action");
+        const shelf = document.getElementById("shelf");
+        if (!action || !shelf) return false;
+        const button = action.getBoundingClientRect();
+        const clip = shelf.getBoundingClientRect();
+        return (
+          button.width > 0 &&
+          button.left >= clip.left &&
+          button.right <= clip.right
+        );
+      });
     },
     {
       host: mobile,
