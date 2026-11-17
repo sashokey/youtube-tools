@@ -8,10 +8,11 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "lint": "eslint \"**/*.ts\"",
+    "pretest": "npm run check:build",
     "test": "node --test tests/*.test.ts && YOUTUBE_TOOLS_ARTIFACT=youtube-tools.debug.js node --test tests/*.test.ts",
     "test:stock": "node --test tests/live/stock.test.ts",
     "test:live": "node --test tests/live/features.test.ts tests/live/sponsorblock.test.ts",
-    "check": "npm run typecheck && npm run lint && npm run check:build && npm test",
+    "check": "npm run typecheck && npm run lint && npm test",
     "build": "npm run typecheck && node tools/build.ts",
     "check:build": "node tools/build.ts --check"
   },

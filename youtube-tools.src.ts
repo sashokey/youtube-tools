@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Tools
 // @namespace    https://github.com/sashokey/youtube-tools
-// @version      1.0.8
+// @version      1.0.9
 // @description  Quick feedback, watched-video filtering, audio-only playback, and manual playlist navigation.
 // @match        https://www.youtube.com/*
 // @match        https://m.youtube.com/*
@@ -14,7 +14,7 @@
 // @grant        GM_addStyle
 // @grant        unsafeWindow
 // @homepageURL  https://github.com/sashokey/youtube-tools
-// @license      GPL-3.0
+// @license      GPL-3.0-only
 // ==/UserScript==
 
 import { audio } from "./src/audio.ts";
@@ -22,6 +22,7 @@ import { mobile, ready } from "./src/dom.ts";
 import { feedback } from "./src/feedback.ts";
 import { playlist } from "./src/playlist.ts";
 import { settings } from "./src/settings.ts";
+import { initializePreferences } from "./src/state.ts";
 import { watched } from "./src/watched.ts";
 
 const key = Symbol.for("sashokey.youtube-tools");
@@ -33,6 +34,7 @@ if (
   !location.pathname.startsWith("/embed/")
 ) {
   Object.defineProperty(document, key, { value: true });
+  initializePreferences();
   audio();
   playlist();
   ready(() => {
