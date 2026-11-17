@@ -9,12 +9,16 @@ const thumbnail =
   'a.ytLockupViewModelContentImage,a#thumbnail,a.media-item-thumbnail-container,a[href^="/watch?v="]:has(img)';
 const picture = "yt-thumbnail-view-model,ytd-thumbnail";
 const nativeActions = "yt-thumbnail-hover-overlay-toggle-actions-view-model";
+const legacyActions = "ytd-thumbnail-overlay-toggle-button-renderer";
 const hiddenActions =
   ":is(.ytThumbnailHoverOverlayToggleActionsViewModelHidden,.ytThumbnailHoverOverlayToggleActionsViewModelHiddenGated)";
 const nativeBackground =
   "ytThumbnailHoverOverlayToggleActionsViewModelOverlayBackground";
 const previewHost = "#video-preview";
 const activePreview = "ytd-video-preview.ytdVideoPreviewActive";
+const previewContainer =
+  "ytd-video-preview,ytd-video-preview-loader,.ytdVideoPreviewLoaderVideoPreviewContainer";
+const previewControls = "ytm-mute-button,ytm-closed-captioning-button";
 const triggerSelector =
   '.ytLockupMetadataViewModelMenuButton button,ytd-menu-renderer button,ytm-menu button,#menu button,button[aria-label="Action menu"]';
 const legacyMenu = "div#menu.menu-container:has(>.menu-content[role=dialog])";
@@ -43,7 +47,8 @@ type Item = {
   surface: Element;
   panel: HTMLDivElement;
 };
-type Preview = { item: Item; target: HTMLElement };
+type Hovered = { item: Item; href: string };
+type Preview = Hovered & { target: HTMLElement };
 type Operation = {
   item: Item;
   trigger: HTMLElement;
@@ -60,6 +65,7 @@ const styles = `
   .ytt-feedback-row{flex-direction:row}
   .ytt-feedback-card:has(.ytt-feedback-thumbnail:hover):not(:has(${nativeActions}${hiddenActions}))>.ytt-feedback,.ytt-feedback-card:focus-within>.ytt-feedback,.ytt-feedback:hover,.ytt-feedback-preview{opacity:1;visibility:visible}
   .ytt-feedback-card:has(>.ytt-feedback:hover,${nativeActions}:hover) ${nativeActions}${hiddenActions}{opacity:1;visibility:visible}
+  .ytt-feedback-card:has(>.ytt-feedback:hover) ${legacyActions}:not([hidden]){opacity:1;visibility:visible}
   ${mobile ? ".ytt-feedback{opacity:1;visibility:visible}" : "@media(hover:none),(pointer:coarse){.ytt-feedback{opacity:1;visibility:visible}}"}
   button.ytt-action{position:relative;box-sizing:border-box;display:grid;place-items:center;width:32px;height:32px;padding:0;border:0;border-radius:50%;color:var(--yt-spec-static-white,#fff);cursor:pointer;pointer-events:auto}
   :where(button.ytt-action){background-color:rgba(0,0,0,.6)}
@@ -372,7 +378,7 @@ function sameRoute(route: string, popup?: Element): boolean {
   return overlays.some((hash) => new URL(hash, route).href === location.href);
 }
 
-function measure(item: Item, preview?: HTMLElement) {
+function measure(item: Item, viewport: number, preview?: HTMLElement) {
   if (item.anchor.closest("[hidden]")) return;
   const surface = preview ?? item.surface;
   if (getComputedStyle(surface).visibility === "hidden") return;
@@ -383,21 +389,24 @@ function measure(item: Item, preview?: HTMLElement) {
   const horizontal = image.height < stack;
   const width = horizontal ? stack : size;
   const height = horizontal ? size : stack;
-  if (image.width < width || image.height < height) return;
+  const visibleLeft = Math.max(image.left, 0);
+  const visibleRight = Math.min(image.right, viewport);
+  const visibleWidth = visibleRight - visibleLeft;
+  if (visibleWidth < width || image.height < height) return;
   const origin = preview ?? item.element;
   const originBox = origin.getBoundingClientRect();
   const rtl = getComputedStyle(origin).direction === "rtl";
-  const insetX = Math.min(gap, (image.width - width) / 2);
+  const insetX = Math.min(gap, (visibleWidth - width) / 2);
   const insetY = Math.min(gap, (image.height - height) / 2);
-  const left = image.left + insetX;
-  const right = image.right - width - insetX;
+  const left = visibleLeft + insetX;
+  const right = visibleRight - width - insetX;
   const top = image.top + insetY;
   const bottom = image.bottom - height - insetY;
   const native = [
     ...(preview ?? item.anchor).querySelectorAll(
       preview
-        ? "ytm-mute-button button,ytm-closed-captioning-button button"
-        : `${nativeActions} button,ytd-thumbnail-overlay-toggle-button-renderer`,
+        ? `:is(${previewControls}) button`
+        : `${nativeActions} button,${legacyActions}`,
     ),
   ]
     .map((button) => button.getBoundingClientRect())
@@ -425,6 +434,32 @@ function measure(item: Item, preview?: HTMLElement) {
   }
 }
 
+function positionPanel(
+  panel: HTMLDivElement,
+  position: ReturnType<typeof measure>,
+): void {
+  const hidden = !position;
+  if (panel.hidden !== hidden) panel.hidden = hidden;
+  if (!position) return;
+  panel.classList.toggle("ytt-feedback-row", position.horizontal);
+  if (panel.style.left !== position.left) panel.style.left = position.left;
+  if (panel.style.top !== position.top) panel.style.top = position.top;
+}
+
+function movePanel(panel: HTMLDivElement, parent: Element): void {
+  if (
+    typeof parent.moveBefore === "function" &&
+    panel.isConnected === parent.isConnected
+  ) {
+    parent.moveBefore(panel, null);
+    return;
+  }
+  const active = document.activeElement;
+  parent.append(panel);
+  if (active instanceof HTMLElement && panel.contains(active))
+    active.focus({ preventScroll: true });
+}
+
 export function feedback(): void {
   GM_addStyle(styles);
   app((root) => {
@@ -435,48 +470,68 @@ export function feedback(): void {
     const thumbnails =
       typeof ResizeObserver === "function"
         ? new ResizeObserver((entries) => {
-            for (const { target } of entries) {
+            for (const { target, contentRect } of entries) {
+              if (preview?.target === target) {
+                schedulePosition(preview.item);
+                continue;
+              }
               const card = target.closest(cardSelector);
               const item = card && items.get(card);
-              if (item?.surface === target) schedulePosition(item);
+              if (item?.surface !== target) continue;
+              if (
+                hovered?.item === item &&
+                (!contentRect.width || !contentRect.height)
+              )
+                setHovered();
+              schedulePosition(item);
             }
           })
         : undefined;
     let operation: Operation | undefined;
     let scope: Element | undefined;
-    let hovered: Item | undefined;
+    let hovered: Hovered | undefined;
     let preview: Preview | undefined;
-    const previewObserver = new MutationObserver(() => {
-      if (
-        preview &&
-        (!preview.target.matches(activePreview) ||
-          !root.contains(preview.target) ||
-          preview.target.closest("[hidden]") ||
-          !visible(preview.target))
-      )
-        detachPreview();
-    });
+    let host: Element | null = null;
+    const previewObserver = mobile
+      ? undefined
+      : new MutationObserver((records) => {
+          if (
+            records.some(({ target, addedNodes, removedNodes }) => {
+              if (!(target instanceof Element)) return false;
+              if (target === root)
+                return [...addedNodes, ...removedNodes].some(
+                  (node) =>
+                    node instanceof Element && node.matches(previewHost),
+                );
+              if (target === host || target.closest(previewControls))
+                return true;
+              if (!target.matches(previewContainer)) return false;
+              return !(
+                target === preview?.target &&
+                addedNodes.length === 1 &&
+                addedNodes[0] === preview.item.panel &&
+                !removedNodes.length
+              );
+            })
+          )
+            syncPreview();
+        });
 
     function positionBatch(): void {
       frame = undefined;
       const batch = [...pendingPositions];
       pendingPositions.clear();
+      const viewport = document.documentElement.clientWidth;
       const positions = batch.map((item) => ({
         panel: item.panel,
         position: measure(
           item,
+          viewport,
           preview?.item === item ? preview.target : undefined,
         ),
       }));
-      for (const { panel, position } of positions) {
-        const hidden = !position;
-        if (panel.hidden !== hidden) panel.hidden = hidden;
-        if (!position) continue;
-        panel.classList.toggle("ytt-feedback-row", position.horizontal);
-        if (panel.style.left !== position.left)
-          panel.style.left = position.left;
-        if (panel.style.top !== position.top) panel.style.top = position.top;
-      }
+      for (const { panel, position } of positions)
+        positionPanel(panel, position);
     }
 
     function schedulePosition(item: Item): void {
@@ -487,40 +542,76 @@ export function feedback(): void {
     function ownsPanel(item: Item): boolean {
       return (
         item.panel.parentElement === item.element ||
-        (preview?.item === item && item.panel.parentElement === preview.target)
+        (preview?.item === item &&
+          preview.href === item.anchor.href &&
+          item.panel.parentElement === preview.target)
       );
     }
 
-    function detachPreview(restore = true): void {
+    function detachPreview(): void {
       if (!preview) return;
-      const { item } = preview;
+      const { item, target } = preview;
       preview = undefined;
-      previewObserver.disconnect();
+      thumbnails?.unobserve(target);
+      movePanel(item.panel, item.element);
       item.panel.classList.remove("ytt-feedback-preview");
-      if (restore) {
-        item.element.append(item.panel);
-        schedulePosition(item);
-      }
+      schedulePosition(item);
     }
 
-    function enterPreview(target: HTMLElement, item: Item): void {
-      if (preview?.item === item && preview.target === target) return;
-      detachPreview();
-      preview = { item, target };
-      target.append(item.panel);
-      item.panel.classList.add("ytt-feedback-preview");
-      schedulePosition(item);
-      for (
-        let parent: Element | null = target;
-        parent && root.contains(parent);
-        parent = parent.parentElement
-      ) {
-        previewObserver.observe(parent, {
+    function watchPreviewHost(): void {
+      previewObserver?.disconnect();
+      host = hovered ? root.querySelector(previewHost) : null;
+      if (!hovered) return;
+      previewObserver?.observe(root, { childList: true });
+      if (host)
+        previewObserver?.observe(host, {
+          subtree: true,
           childList: true,
           attributes: true,
           attributeFilter: ["class", "hidden", "style"],
         });
-        if (parent === root) break;
+    }
+
+    function setHovered(item?: Item): void {
+      if (hovered?.item === item && hovered?.href === item?.anchor.href) return;
+      hovered = item && { item, href: item.anchor.href };
+      detachPreview();
+      watchPreviewHost();
+    }
+
+    function syncPreview(): void {
+      if (!hovered) return;
+      const { item, href } = hovered;
+      if (href !== item.anchor.href || !visible(item.anchor)) {
+        setHovered();
+        return;
+      }
+      if (root.querySelector(previewHost) !== host) watchPreviewHost();
+      const target = host?.querySelector(activePreview);
+      if (!(target instanceof HTMLElement) || target.closest("[hidden]")) {
+        detachPreview();
+        return;
+      }
+      if (preview?.target !== target) {
+        detachPreview();
+        const image = item.surface.getBoundingClientRect();
+        const box = target.getBoundingClientRect();
+        const x = image.left + image.width / 2;
+        const y = image.top + image.height / 2;
+        if (x < box.left || x >= box.right || y < box.top || y >= box.bottom)
+          return;
+        preview = { item, target, href };
+        thumbnails?.observe(target);
+      }
+      if (item.panel.parentElement !== target) {
+        positionPanel(
+          item.panel,
+          measure(item, document.documentElement.clientWidth, target),
+        );
+        item.panel.classList.add("ytt-feedback-preview");
+        movePanel(item.panel, target);
+      } else {
+        schedulePosition(item);
       }
     }
 
@@ -674,8 +765,7 @@ export function feedback(): void {
     }
 
     function remove(item: Item): void {
-      if (preview?.item === item) detachPreview(false);
-      if (hovered === item) hovered = undefined;
+      if (hovered?.item === item) setHovered();
       thumbnails?.unobserve(item.surface);
       pendingPositions.delete(item);
       if (frame !== undefined && !pendingPositions.size) {
@@ -691,7 +781,12 @@ export function feedback(): void {
     function mount(element: Element): void {
       const old = items.get(element);
       const anchor = element.querySelector(thumbnail);
-      const surface = anchor?.querySelector(picture) ?? anchor;
+      const surface =
+        anchor?.querySelector(picture) ??
+        (anchor?.closest("ytd-thumbnail")
+          ? anchor.querySelector("img")
+          : null) ??
+        anchor;
       const suitable =
         anchor instanceof HTMLAnchorElement &&
         anchor.closest(cardSelector) === element &&
@@ -699,6 +794,8 @@ export function feedback(): void {
         !element.closest(`${ignored},${historyRenderer}`) &&
         !element.querySelector(ignored);
       if (old) {
+        if (hovered?.item === old && hovered.href !== old.anchor.href)
+          setHovered();
         if (
           suitable &&
           anchor === old.anchor &&
@@ -855,8 +952,7 @@ export function feedback(): void {
 
     function sync(): void {
       if (operation && !sameRoute(operation.route)) cancelOperation();
-      if (preview) detachPreview();
-      hovered = undefined;
+      setHovered();
       if (bindScope()) scanScope();
     }
 
@@ -875,33 +971,28 @@ export function feedback(): void {
       "pointerover",
       (event) => {
         if (!(event.target instanceof Element)) return;
-        if (!mobile && event instanceof PointerEvent) {
-          const target = event.target.closest(
-            `${previewHost} ${activePreview}`,
-          );
-          if (target instanceof HTMLElement && hovered) {
-            const box = hovered.surface.getBoundingClientRect();
-            if (
-              event.clientX >= box.left &&
-              event.clientX < box.right &&
-              event.clientY >= box.top &&
-              event.clientY < box.bottom
-            ) {
-              enterPreview(target, hovered);
-              return;
-            }
-          }
-          if (preview) detachPreview();
+        if (
+          !mobile &&
+          event.target.closest(`${previewHost} ${activePreview}`)
+        ) {
+          syncPreview();
+          return;
         }
         const selected = event.target.closest(cardSelector);
         const item = selected && items.get(selected);
         if (!mobile)
-          hovered =
-            item && item.surface.contains(event.target) ? item : undefined;
+          setHovered(
+            item &&
+              (item.anchor.contains(event.target) ||
+                item.panel.contains(event.target))
+              ? item
+              : undefined,
+          );
         if (item) schedulePosition(item);
       },
-      { passive: true },
+      { capture: true, passive: true },
     );
+    if (!mobile) root.addEventListener("pointerleave", () => setHovered());
     navigation(sync);
     sync();
   });

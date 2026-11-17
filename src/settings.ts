@@ -45,6 +45,7 @@ function containsSelector(node: Node, selector: string): boolean {
 }
 
 function desktopAnchor(menus: readonly Element[]): Element | undefined {
+  const anchors: Element[] = [];
   for (const scope of menus) {
     if (scope.closest('tp-yt-iron-dropdown[aria-hidden="true"]')) continue;
     const rows = [
@@ -62,8 +63,13 @@ function desktopAnchor(menus: readonly Element[]): Element | undefined {
       return "iconType" in data.icon && data.icon.iconType === "KEYBOARD";
     });
     const [anchor] = rows;
-    if (rows.length === 1 && anchor) return anchor;
+    if (rows.length === 1 && anchor) anchors.push(anchor);
   }
+  const opened = anchors.filter((anchor) =>
+    anchor.closest("tp-yt-iron-dropdown[opened]"),
+  );
+  const eligible = opened.length ? opened : anchors;
+  return eligible.length === 1 ? eligible[0] : eligible.find(visible);
 }
 
 export function settings(): void {
