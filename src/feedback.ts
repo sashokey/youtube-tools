@@ -49,11 +49,16 @@ type Item = {
   anchor: HTMLAnchorElement;
   surface: Element;
   panel: HTMLDivElement;
+  clippers: Set<Element>;
 };
 type Hovered = { item: Item; href: string; gesture: symbol };
 type Preview = Hovered & { target: HTMLElement };
 type Ownership = Pick<Hovered, "href" | "gesture"> & { ended: boolean };
-type HorizontalBounds = { left: number; right: number };
+type HorizontalBounds = {
+  left: number;
+  right: number;
+  clippers: readonly Element[];
+};
 type Operation = {
   item: Item;
   trigger: HTMLElement;
@@ -393,7 +398,7 @@ function clipBounds(
     element === document.body ||
     element === document.documentElement
   )
-    return { left: 0, right: viewport };
+    return { left: 0, right: viewport, clippers: [] };
   const cached = cache.get(element);
   if (cached) return cached;
   const outer = clipBounds(element.parentElement, viewport, cache);
@@ -406,6 +411,7 @@ function clipBounds(
     bounds = {
       left: Math.max(outer.left, left),
       right: Math.min(outer.right, left + element.clientWidth),
+      clippers: [...outer.clippers, element],
     };
   }
   cache.set(element, bounds);
@@ -415,12 +421,17 @@ function clipBounds(
 function measure(
   item: Item,
   viewport: number,
+  origin: Element,
+  clips: Map<Element, HorizontalBounds>,
+  clippers: Set<Element>,
   preview?: HTMLElement,
-  origin = preview ?? item.element,
-  clips = new Map<Element, HorizontalBounds>(),
 ) {
-  if (item.anchor.closest("[hidden]")) return;
   const surface = preview ?? item.surface;
+  const imageClip = clipBounds(surface.parentElement, viewport, clips);
+  const panelClip = clipBounds(origin, viewport, clips);
+  for (const element of imageClip.clippers) clippers.add(element);
+  for (const element of panelClip.clippers) clippers.add(element);
+  if (item.anchor.closest("[hidden]")) return;
   if (getComputedStyle(surface).visibility === "hidden") return;
   const image = surface.getBoundingClientRect();
   const size = 32;
@@ -429,9 +440,8 @@ function measure(
   const horizontal = image.height < stack;
   const width = horizontal ? stack : size;
   const height = horizontal ? size : stack;
-  const clip = clipBounds(surface.parentElement, viewport, clips);
-  const visibleLeft = Math.max(image.left, clip.left);
-  const visibleRight = Math.min(image.right, clip.right);
+  const visibleLeft = Math.max(image.left, imageClip.left, panelClip.left);
+  const visibleRight = Math.min(image.right, imageClip.right, panelClip.right);
   const visibleWidth = visibleRight - visibleLeft;
   if (visibleWidth < width || image.height < height) return;
   const originBox = origin.getBoundingClientRect();
@@ -509,6 +519,14 @@ export function feedback(): void {
     const scrollPositions = new WeakMap<Element, number>();
     const changedScroll = new Set<Element>();
     const previewOwners = new WeakMap<HTMLElement, Ownership>();
+    const clippedItems = new Map<Element, Set<Item>>();
+    const clippingSizes =
+      typeof ResizeObserver === "function"
+        ? new ResizeObserver((entries) => {
+            for (const { target } of entries)
+              clippedItems.get(target)?.forEach(schedulePosition);
+          })
+        : undefined;
     let frame: number | undefined;
     const thumbnails =
       typeof ResizeObserver === "function"
@@ -580,6 +598,8 @@ export function feedback(): void {
       } else if (record.attributeName !== "hidden") {
         return;
       }
+      if (target instanceof HTMLElement && target.matches(previewTag))
+        endOwnership(target);
       for (const child of target.querySelectorAll<HTMLElement>(previewTag))
         endOwnership(child);
     }
@@ -589,6 +609,29 @@ export function feedback(): void {
       if (!owner || owner.ended) return;
       owner.ended = true;
       if (preview?.target === target) detachPreview();
+    }
+
+    function watchClipping(item: Item, next: Set<Element>): void {
+      if (!clippingSizes) return;
+      for (const element of item.clippers) {
+        if (next.has(element)) continue;
+        const entries = clippedItems.get(element);
+        entries?.delete(item);
+        if (!entries?.size) {
+          clippingSizes.unobserve(element);
+          clippedItems.delete(element);
+        }
+      }
+      for (const element of next) {
+        if (item.clippers.has(element)) continue;
+        const entries = clippedItems.get(element);
+        if (entries) entries.add(item);
+        else {
+          clippedItems.set(element, new Set([item]));
+          clippingSizes.observe(element);
+        }
+      }
+      item.clippers = next;
     }
 
     function positionBatch(): void {
@@ -611,13 +654,17 @@ export function feedback(): void {
         const target = preview?.item === item ? preview.target : undefined;
         const origin =
           target && item.panel.parentElement === target ? target : item.element;
+        const clippers = new Set<Element>();
         return {
-          panel: item.panel,
-          position: measure(item, viewport, target, origin, clips),
+          item,
+          clippers,
+          position: measure(item, viewport, origin, clips, clippers, target),
         };
       });
-      for (const { panel, position } of positions)
-        positionPanel(panel, position);
+      for (const { item, clippers, position } of positions) {
+        watchClipping(item, clippers);
+        positionPanel(item.panel, position);
+      }
     }
 
     function schedulePosition(item: Item): void {
@@ -707,15 +754,17 @@ export function feedback(): void {
         item.panel.parentElement !== destination ||
         !item.panel.classList.contains("ytt-feedback-preview")
       ) {
-        positionPanel(
-          item.panel,
-          measure(
-            item,
-            document.documentElement.clientWidth,
-            target,
-            destination,
-          ),
+        const clippers = new Set<Element>();
+        const position = measure(
+          item,
+          document.documentElement.clientWidth,
+          destination,
+          new Map(),
+          clippers,
+          target,
         );
+        watchClipping(item, clippers);
+        positionPanel(item.panel, position);
         item.panel.classList.add("ytt-feedback-preview");
         if (item.panel.parentElement !== destination)
           movePanel(item.panel, destination);
@@ -876,6 +925,7 @@ export function feedback(): void {
     function remove(item: Item): void {
       if (hovered?.item === item) setHovered();
       thumbnails?.unobserve(item.surface);
+      watchClipping(item, new Set());
       pendingPositions.delete(item);
       if (
         frame !== undefined &&
@@ -923,7 +973,13 @@ export function feedback(): void {
       if (!suitable || !surface) return;
       const panel = document.createElement("div");
       panel.className = "ytt-feedback";
-      const item = { element, anchor, surface, panel };
+      const item: Item = {
+        element,
+        anchor,
+        surface,
+        panel,
+        clippers: new Set(),
+      };
       for (const action of ["interest", "channel"] as const) {
         const button = document.createElement("button");
         button.type = "button";
