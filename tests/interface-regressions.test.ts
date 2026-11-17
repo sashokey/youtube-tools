@@ -948,6 +948,35 @@ void test("an opaque mobile top bar without a pointer target never exposes a hid
         await action.evaluate((e) => e instanceof HTMLElement && e.inert),
         false,
       );
+      const bar = page.locator("ytm-mobile-topbar-renderer");
+      await bar.evaluate((element) => {
+        if (element instanceof HTMLElement) element.hidden = false;
+      });
+      await page.waitForFunction(
+        ({ x, y }) => !document.elementFromPoint(x, y)?.closest(".ytt-action"),
+        at,
+      );
+      await bar.evaluate((element) => element.remove());
+      await page.waitForFunction(
+        ({ x, y }) =>
+          Boolean(document.elementFromPoint(x, y)?.closest(".ytt-action")),
+        at,
+      );
+      await page.locator("ytm-app").evaluate((element) => {
+        element.append(document.createElement("ytm-mobile-topbar-renderer"));
+      });
+      await page.waitForFunction(
+        ({ x, y }) => !document.elementFromPoint(x, y)?.closest(".ytt-action"),
+        at,
+      );
+      await bar.evaluate((element) => {
+        if (element instanceof HTMLElement) element.style.height = "4px";
+      });
+      await page.waitForFunction(
+        ({ x, y }) =>
+          Boolean(document.elementFromPoint(x, y)?.closest(".ytt-action")),
+        at,
+      );
     },
     {
       host: mobile,
