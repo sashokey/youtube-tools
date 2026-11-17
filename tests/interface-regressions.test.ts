@@ -261,65 +261,137 @@ void test("moving from a desktop thumbnail to its feedback action keeps the nati
     assert.deepEqual(await actionsOnFirstFrame(page), [true, true]);
   }));
 
+const previewMarkup = `<div id="video-preview"><ytd-video-preview-loader hidden><div class="ytdVideoPreviewLoaderVideoPreviewContainer ytdVideoPreviewLoaderAnchored"><ytd-video-preview class="ytdVideoPreviewActive ytdVideoPreviewFillContainer"><ytm-mute-button><button aria-label="Mute"></button></ytm-mute-button><ytm-closed-captioning-button><button aria-label="Captions"></button></ytm-closed-captioning-button></ytd-video-preview></div></ytd-video-preview-loader></div>`;
+
+function previewFixture(run: (page: Page) => Promise<void>): Promise<void> {
+  return fixture(card() + card("", "next-video"), run, {
+    css: `
+      ytd-video-preview-loader {position:fixed;z-index:2}
+      ytd-video-preview {position:relative;display:block;width:100%;height:100%;background:#555}
+      ytm-mute-button,ytm-closed-captioning-button {position:absolute;inset-inline-end:4px;inset-block-start:4px}
+      ytm-closed-captioning-button {inset-block-start:40px}
+      ytd-video-preview button {width:32px;height:32px}
+    `,
+    outsideFeed: previewMarkup,
+  });
+}
+
+async function showPreview(page: Page): Promise<void> {
+  const image = page.locator("#video yt-thumbnail-view-model");
+  await image.hover();
+  await page.locator("#video .ytt-action").first().waitFor();
+  const imageBox = await image.boundingBox();
+  assert.ok(imageBox);
+  await page.locator("ytd-video-preview-loader").evaluate((element, box) => {
+    if (!(element instanceof HTMLElement))
+      throw new Error("Missing preview loader");
+    element.hidden = false;
+    element.style.left = `${box.x}px`;
+    element.style.top = `${box.y}px`;
+    element.style.width = `${box.width}px`;
+    element.style.height = `${box.height}px`;
+    element.firstElementChild?.classList.add("ytdVideoPreviewLoaderActive");
+  }, imageBox);
+}
+
 void test("desktop feedback remains usable after the anchored inline preview covers the thumbnail", () =>
-  fixture(
-    card() + card("", "next-video"),
-    async (page) => {
-      const image = page.locator("#video yt-thumbnail-view-model");
-      await image.hover();
-      await page.locator("#video .ytt-action").first().waitFor();
-      const imageBox = await image.boundingBox();
-      assert.ok(imageBox);
-      const loader = page.locator("ytd-video-preview-loader");
-      await loader.evaluate((element, box) => {
-        if (!(element instanceof HTMLElement))
-          throw new Error("Missing preview loader");
-        element.hidden = false;
-        element.style.left = `${box.x}px`;
-        element.style.top = `${box.y}px`;
-        element.style.width = `${box.width}px`;
-        element.style.height = `${box.height}px`;
-        element.firstElementChild?.classList.add("ytdVideoPreviewLoaderActive");
-      }, imageBox);
-      const actions = page.getByRole("button", {
-        name: "Not interested",
-        exact: true,
-      });
-      const action = actions.first();
-      await action.waitFor();
-      assert.equal(await actions.count(), 1);
-      const native = loader.getByRole("button", { name: "Mute" });
-      const nativeBox = await native.boundingBox();
-      const actionBox = await action.boundingBox();
-      assert.ok(nativeBox && actionBox);
-      for (const [name, box] of [
-        ["Mute", nativeBox],
-        ["Not interested", actionBox],
-      ] as const) {
-        assert.equal(
-          await page.evaluate(
-            ({ x, y }) =>
-              document
-                .elementFromPoint(x, y)
-                ?.closest("button")
-                ?.getAttribute("aria-label"),
-            center(box),
-          ),
-          name,
-        );
-      }
-    },
-    {
-      css: `
-        ytd-video-preview-loader {position:fixed;z-index:2}
-        ytd-video-preview {position:relative;display:block;width:100%;height:100%;background:#555}
-        ytm-mute-button,ytm-closed-captioning-button {position:absolute;inset-inline-end:4px;inset-block-start:4px}
-        ytm-closed-captioning-button {inset-block-start:40px}
-        ytd-video-preview button {width:32px;height:32px}
-      `,
-      outsideFeed: `<div id="video-preview"><ytd-video-preview-loader hidden><div class="ytdVideoPreviewLoaderVideoPreviewContainer ytdVideoPreviewLoaderAnchored"><ytd-video-preview class="ytdVideoPreviewActive ytdVideoPreviewFillContainer"><ytm-mute-button><button aria-label="Mute"></button></ytm-mute-button><ytm-closed-captioning-button><button aria-label="Captions"></button></ytm-closed-captioning-button></ytd-video-preview></div></ytd-video-preview-loader></div>`,
-    },
-  ));
+  previewFixture(async (page) => {
+    await showPreview(page);
+    const action = page.locator("ytd-video-preview").getByRole("button", {
+      name: "Not interested",
+      exact: true,
+    });
+    await action.waitFor();
+    assert.equal(
+      await page
+        .getByRole("button", { name: "Not interested", exact: true })
+        .count(),
+      1,
+    );
+    const native = page
+      .locator("ytd-video-preview")
+      .getByRole("button", { name: "Mute" });
+    const nativeBox = await native.boundingBox();
+    const actionBox = await action.boundingBox();
+    assert.ok(nativeBox && actionBox);
+    for (const [name, box] of [
+      ["Mute", nativeBox],
+      ["Not interested", actionBox],
+    ] as const) {
+      assert.equal(
+        await page.evaluate(
+          ({ x, y }) =>
+            document
+              .elementFromPoint(x, y)
+              ?.closest("button")
+              ?.getAttribute("aria-label"),
+          center(box),
+        ),
+        name,
+      );
+    }
+  }));
+
+async function enterPreviewWithPointer(page: Page): Promise<void> {
+  await showPreview(page);
+  const player = page.locator("ytd-video-preview");
+  const box = await player.boundingBox();
+  assert.ok(box);
+  const { x, y } = center(box);
+  await page.mouse.move(x + 1, y);
+  await player.locator(".ytt-action").first().waitFor();
+}
+
+void test("feedback detaches from the preview when YouTube recycles its source card", () =>
+  previewFixture(async (page) => {
+    await enterPreviewWithPointer(page);
+    const preview = page.locator("ytd-video-preview");
+    const nativeRequests = await preview.evaluate((element) => {
+      const link = document.querySelector<HTMLAnchorElement>("#video a");
+      const trigger = document.querySelector<HTMLButtonElement>(
+        "#video .ytLockupMetadataViewModelMenuButton button",
+      );
+      const action = element.querySelector<HTMLButtonElement>(".ytt-action");
+      if (!link || !trigger || !action)
+        throw new Error("Missing fixture control");
+      let requests = 0;
+      trigger.addEventListener("click", () => requests++);
+      link.href = "/watch?v=lmnopqrstuv";
+      action.click();
+      return requests;
+    });
+    assert.equal(nativeRequests, 0);
+    await preview.locator(".ytt-feedback").waitFor({ state: "detached" });
+    await page.locator("#video a").focus();
+    assert.equal(await page.locator("#video .ytt-action").count(), 2);
+  }));
+
+void test("an expanded preview keeps its action when the pointer leaves the original image bounds", () =>
+  previewFixture(async (page) => {
+    await enterPreviewWithPointer(page);
+    const loader = page.locator("ytd-video-preview-loader");
+    await loader.evaluate((element) => {
+      if (!(element instanceof HTMLElement))
+        throw new Error("Missing preview loader");
+      element.style.width = `${element.getBoundingClientRect().width + 120}px`;
+    });
+    await page.waitForFunction(() => {
+      const action = document.querySelector("ytd-video-preview .ytt-action");
+      const image = document.querySelector("#video yt-thumbnail-view-model");
+      return (
+        !!action &&
+        !!image &&
+        action.getBoundingClientRect().left >
+          image.getBoundingClientRect().right
+      );
+    });
+    const action = loader.getByRole("button", {
+      name: "Not interested",
+      exact: true,
+    });
+    await action.hover();
+    assert.equal(await action.isVisible(), true);
+  }));
 
 void test("account switches are ready on the first frame of a CSS-only native menu reveal", () =>
   fixture(
@@ -338,5 +410,31 @@ void test("account switches are ready on the first frame of a CSS-only native me
       `,
       outsideFeed: `<ytd-popup-container><tp-yt-iron-dropdown opened><ytd-multi-page-menu-renderer menu-style="multi-page-menu-style-type-system"><ytd-compact-link-renderer id="keyboard">Keyboard shortcuts</ytd-compact-link-renderer></ytd-multi-page-menu-renderer></tp-yt-iron-dropdown></ytd-popup-container>`,
       beforeCandidate: `document.addEventListener("DOMContentLoaded", () => { const row = document.querySelector("#keyboard"); if (row) row.data = {icon: {iconType: "KEYBOARD"}}; });`,
+    },
+  ));
+
+void test("the current account menu receives switches when an older menu is still mounted", () =>
+  fixture(
+    "",
+    async (page) => {
+      const current = page
+        .locator("#current-menu")
+        .getByRole("menuitemcheckbox");
+      assert.equal(await current.count(), 2);
+      assert.equal(
+        await page.locator("#old-menu .ytt-setting-group").count(),
+        0,
+      );
+    },
+    {
+      css: `
+        ytd-compact-link-renderer {display:block}
+        #old-menu {visibility:hidden}
+      `,
+      outsideFeed: `<ytd-popup-container>
+        <tp-yt-iron-dropdown id="old-menu"><ytd-multi-page-menu-renderer menu-style="multi-page-menu-style-type-system"><ytd-compact-link-renderer>Keyboard shortcuts</ytd-compact-link-renderer></ytd-multi-page-menu-renderer></tp-yt-iron-dropdown>
+        <tp-yt-iron-dropdown id="current-menu" opened><ytd-multi-page-menu-renderer menu-style="multi-page-menu-style-type-system"><ytd-compact-link-renderer>Keyboard shortcuts</ytd-compact-link-renderer></ytd-multi-page-menu-renderer></tp-yt-iron-dropdown>
+      </ytd-popup-container>`,
+      beforeCandidate: `document.addEventListener("DOMContentLoaded", () => { for (const row of document.querySelectorAll("ytd-compact-link-renderer")) row.data = {icon: {iconType: "KEYBOARD"}}; });`,
     },
   ));
