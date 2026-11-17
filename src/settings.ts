@@ -46,11 +46,7 @@ function containsSelector(node: Node, selector: string): boolean {
 
 function desktopAnchor(menus: readonly Element[]): Element | undefined {
   for (const scope of menus) {
-    if (
-      scope.closest('tp-yt-iron-dropdown[aria-hidden="true"]') ||
-      !visible(scope)
-    )
-      continue;
+    if (scope.closest('tp-yt-iron-dropdown[aria-hidden="true"]')) continue;
     const rows = [
       ...scope.querySelectorAll("ytd-compact-link-renderer"),
     ].filter((row) => {
@@ -66,7 +62,7 @@ function desktopAnchor(menus: readonly Element[]): Element | undefined {
       return "iconType" in data.icon && data.icon.iconType === "KEYBOARD";
     });
     const [anchor] = rows;
-    if (rows.length === 1 && anchor && visible(anchor)) return anchor;
+    if (rows.length === 1 && anchor) return anchor;
   }
 }
 
