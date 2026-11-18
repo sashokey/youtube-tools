@@ -1,4 +1,4 @@
-Adds native-style recommendation feedback, watched-video filtering, audio-only playback, and manual playlist navigation on desktop and mobile YouTube. Requires [Violentmonkey](https://violentmonkey.github.io/).
+Adds native-style recommendation feedback, watched-video filtering, audio-only playback, and manual playlist navigation on desktop and mobile YouTube. Requires Violentmonkey.
 
 ## Installation
 
